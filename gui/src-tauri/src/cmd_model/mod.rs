@@ -26,7 +26,7 @@ pub(crate) struct ModelStatus {
     pub loaded: bool,
     /// "local" | "remote" | "" when nothing is loaded.
     pub mode: String,
-    /// Display label ("Unlimited-OCR Q8_0" / the remote URL), empty when unloaded.
+    /// Display label ("Unlimited-OCR-2 Q8_0" / the remote URL), empty when unloaded.
     pub label: String,
 }
 
@@ -107,9 +107,9 @@ pub(crate) async fn load_model(
                 }
                 let pdftoppm = unlocr::preflight::pdftoppm().map_err(|e| e.to_string())?;
                 eprintln!(
-                    "[load_model] remote mode: Unlimited-OCR / DeepSeek-OCR is only known to run \
-                     on llama.cpp (PR #17400), vLLM, and SGLang. Ollama / LM Studio do not support \
-                     these OCR models; gateways (litellm/vLLM) need a model name set."
+                    "[load_model] remote mode requires Unlimited-OCR-2 support on the server. \
+                     GGUF requires the patched llama-server; gateways (litellm/vLLM) need \
+                     a model name set."
                 );
                 let mut real_key = api_key.filter(|k| !k.trim().is_empty());
                 if let Some(ref k) = real_key {
@@ -205,7 +205,7 @@ pub(crate) async fn load_model(
                         .file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_else(|| "custom model".to_string()),
-                    None => format!("Unlimited-OCR {quant}"),
+                    None => format!("Unlimited-OCR-2 {quant}"),
                 };
                 (
                     Backend::Local(srv),

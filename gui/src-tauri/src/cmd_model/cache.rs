@@ -360,7 +360,7 @@ pub(crate) fn clear_model_cache() -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// `available_quants` returns all 13 known quants regardless of cache
+    /// `available_quants` returns all five known quants regardless of cache
     /// state, flagging only the ones present in the given cached-set.
     #[test]
     fn available_quants_reports_full_lineup_and_cached_flags() {
@@ -373,7 +373,7 @@ mod tests {
         let q8 = quants.iter().find(|q| q.name == "Q8_0").unwrap();
         assert!(q8.cached);
         assert_eq!(q8.tier.as_deref(), Some("good"));
-        let q6k = quants.iter().find(|q| q.name == "Q6_K").unwrap();
+        let q6k = quants.iter().find(|q| q.name == "AD-Q6_K").unwrap();
         assert!(!q6k.cached);
         assert_eq!(q6k.tier, None);
     }

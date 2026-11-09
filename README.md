@@ -28,7 +28,7 @@ GUI/CLI for unlimited-ocr
 
 **Not affiliated with Unlimited OCR but a wrapper/GUI around Unlimited OCR**
 
-A fast, lightweight tool to OCR PDFs into clean Markdown. It is powered by the **[Unlimited-OCR](https://huggingface.co/sahilchachra/Unlimited-OCR-GGUF)** model (DeepSeek-OCR 3B VLM) running locally via **`llama.cpp`** (GGUF).
+A fast, lightweight tool to OCR PDFs into clean Markdown. It is powered by **[Unlimited-OCR-2](https://huggingface.co/AtomicChat/Unlimited-OCR-2-GGUF)** (AtomicChat GGUF weights) running locally via **`llama.cpp`**.
 
 Currently, a WIP and has pretty tough system requirements. Do not expect it to work on low end devices. This was created to use unlimited-ocr on local computer and it is not affiliated with the original unlimited-ocr.
 
@@ -70,10 +70,15 @@ By default, `unlocr` runs a quantized GGUF on `llama.cpp` (CPU or GPU-offloaded)
 
 | Mode | Variant | Download Size | RAM/VRAM Required | Engine | Quality Flag |
 |------|---------|---------------|-------------------|--------|--------------|
-| **GGUF** | `Q4_K_M` | 1.82 GB | ~4 GB RAM | llama.cpp | `--quality less` |
-| **GGUF** | `Q8_0` *(Default)* | 2.91 GB | ~6 GB RAM | llama.cpp | `--quality good` |
-| **GGUF** | `BF16` | 5.47 GB | ~8 GB RAM | llama.cpp | `--quality best` |
-| **Full Model** | `DeepSeek-OCR` | ~6.7 GB | 16 GB+ VRAM | vLLM | `--gpu` |
+| **GGUF** | `AD-Q4_K` | 2.02 GB | ~4 GB RAM | llama.cpp | `--quality less` |
+| **GGUF** | `Q8_0` *(Default)* | 3.13 GB | ~6 GB RAM | llama.cpp | `--quality good` |
+| **GGUF** | `BF16` | 5.88 GB | ~8 GB RAM | llama.cpp | `--quality best` |
+| **Full Model** | `Unlimited-OCR-2` | ~6.7 GB | 16 GB+ VRAM | compatible remote server | `--gpu` |
+
+AtomicChat also provides `AD-Q6_K` (2.74 GB) and `AD-Q5_K` (2.28 GB), selectable
+with `--quant`. Every quant uses `mmproj-Unlimited-OCR-2-F16.gguf` (825 MB).
+Downloads are pinned to revision `b2cda9bb25ad9dd5585194a528d66a8f2d068c54`
+and verified by SHA256. Cached v1 files are not reused for v2.
 
 ### How to Install by OS
 
@@ -169,11 +174,11 @@ For a complete, in-depth guide on all CLI arguments, sampling configurations, an
 | `--from-list FILE` | *(none)* | Read extra PDF paths from a text file (one per line; `#` comments and blank lines skipped). |
 | `--password PW` | `UNLOCR_PDF_PASSWORD` | User/open password for encrypted PDFs. `--password` overrides the env var. Prefer the `UNLOCR_PDF_PASSWORD` env var or `--password-file` to keep the secret out of your shell history and unlocr's own argv. (Poppler still receives it as `-upw`, so it appears in the process list while `pdfinfo`/`pdftoppm` run, whichever source you use.) |
 | `--password-file FILE` | *(none)* | Text file of candidate PDF passwords (one per line; `#` comments and blank lines skipped). Each PDF is tried against every password until one unlocks it, so a batch with different passwords works. A PDF no password unlocks is skipped (reported), and the rest of the batch continues. |
-| `--quality TIER` | `good` | Quality preset. Options: `best` (BF16), `good` (Q8_0), `less` (Q4_K_M). |
-| `--quant TAG` | *(from quality)* | Exact Hugging Face model quant tag (e.g. `Q6_K`, `IQ4_XS`). Overrides `--quality`. |
+| `--quality TIER` | `good` | Quality preset. Options: `best` (BF16), `good` (Q8_0), `less` (AD-Q4_K). |
+| `--quant TAG` | *(from quality)* | Exact Hugging Face model quant tag (e.g. `AD-Q6_K`, `AD-Q5_K`). Overrides `--quality`. |
 | `--model PATH` | *(HF download)* | Use this GGUF directly, skipping the HF download and naming convention. Disables `--quant`/`--quality`/`--model-dir` selection. |
 | `--mmproj PATH` | *(cached projector)* | Projector (mmproj) GGUF override. Requires `--model`. |
-| `--max-tokens N` | `4096` | Max tokens generated per page (prevents infinite loop/runaways on dense pages). |
+| `--max-tokens N` | `8000` | Max tokens generated per page (prevents infinite loop/runaways on dense pages). |
 | `--pages RANGE` | *(all)* | Pages to OCR: a single page (`5`) or inclusive 1-based range (`5-9`). Applies to every input. |
 | `--task PRESET` | `markdown` | Prompt preset: `markdown` (clean md), `grounding` (md + layout coordinates), `free` (plain text), `figure` (parses charts/figures). |
 | `--prompt TEXT` | *(from task)* | Custom OCR prompt. Overrides `--task`. Use `<|grounding|>` for layout coordinates. |
@@ -185,7 +190,7 @@ For a complete, in-depth guide on all CLI arguments, sampling configurations, an
 | `--model-dir PATH` | *OS Cache* | Custom cache directory for GGUF model downloads. |
 | `--port N` | `0` (Auto) | Port for the spawned `llama-server`. |
 | `--keep-images` | `false` | Retain the intermediate page PNGs generated during processing. |
-| `--gpu` | `false` | Run the full DeepSeek-OCR model via local vLLM. Shortcut for `--endpoint http://localhost:8000 --endpoint-model deepseek-ai/DeepSeek-OCR`. |
+| `--gpu` | `false` | Use a compatible local server for the full Unlimited-OCR-2 model. Shortcut for `--endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR-2`. |
 | `--endpoint URL` | *Local spawn* | Route requests to a remote OpenAI-compatible server (vLLM, SGLang, etc.) and skip local spawn. |
 | `--endpoint-key KEY`| `UNLOCR_API_KEY` | Bearer API token for `--endpoint` (or set via `UNLOCR_API_KEY` env var). |
 | `--endpoint-model M`| *(none)* | Model name sent in endpoint request body (required by vLLM/LiteLLM gateways). |
@@ -194,7 +199,7 @@ For a complete, in-depth guide on all CLI arguments, sampling configurations, an
 
 ### How It Works Under the Hood
 1.  **Preflight**: Resolves `llama-server` (preferring unlocr's cached patched R-SWA build, auto-downloading it if absent) and locates `pdftoppm`. An external `llama-server` (`--llama-bin`/`PATH`) is used with a warning that it cannot be verified for R-SWA support (silence via `UNLOCR_ALLOW_EXTERNAL_LLAMA=1`).
-2.  **Model Cache**: Checks for `Unlimited-OCR-<quant>.gguf` and `mmproj-Unlimited-OCR-F16.gguf` in the cache directory, downloading them from HF if missing.
+2.  **Model Cache**: Checks for `Unlimited-OCR-2-<quant>.gguf` and `mmproj-Unlimited-OCR-2-F16.gguf` in the cache directory, downloading them from AtomicChat on HF if missing.
 3.  **Spawn Server**: Starts a single background `llama-server` instance and polls `/health` until active.
 4.  **OCR Processing**: For each PDF, runs `pdftoppm` to extract pages as PNGs, POSTs them sequentially (base64 encoded) to `/v1/chat/completions`, and appends the markdown output.
 
@@ -215,23 +220,18 @@ To remove the application binary and purge downloaded model weights, run:
 *   **Windows**: `powershell -ExecutionPolicy Bypass -File packaging\windows\uninstall.ps1`
 
 ### Running the Full Model on GPU (vLLM)
-For high-performance GPU serving of the unquantized model:
-1.  Install vLLM (pre-release recommended for DeepSeek-OCR support):
-    ```bash
-    pip install -U vllm --pre --extra-index-url https://wheels.vllm.ai/nightly
-    ```
-2.  Serve the model:
-    ```bash
-    vllm serve deepseek-ai/DeepSeek-OCR \
-      --no-enable-prefix-caching \
-      --mm-processor-cache-gb 0 \
-      --logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
-    ```
-3.  Run `unlocr` targeting this endpoint:
-    ```bash
-    unlocr report.pdf --gpu
-    ```
-    *(In the GUI, select the **GPU full model (vLLM · DeepSeek-OCR)** engine preset.)*
+Start an OpenAI-compatible backend that explicitly supports
+[`baidu/Unlimited-OCR-2`](https://huggingface.co/baidu/Unlimited-OCR-2), following
+that backend's v2 setup instructions. Then connect with:
+
+```bash
+unlocr report.pdf --endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR-2
+# Equivalent shortcut:
+unlocr report.pdf --gpu
+```
+
+In the GUI, select **GPU full model (vLLM · Unlimited-OCR-2)**. This preset only
+configures the connection; it does not install or start a remote backend.
 
 > [!TIP]
 > **Google Colab**: Check out the Google Colab notebooks to run the full GPU pipeline on a free Colab T4 cloud instance:

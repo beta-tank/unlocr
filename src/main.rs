@@ -230,9 +230,9 @@ fn run_remote(base_url: String, inputs: &[PathBuf], args: &Args) -> Res<()> {
         .or_else(|| std::env::var("UNLOCR_API_KEY").ok());
 
     eprintln!(
-        "warning: remote endpoint mode. Unlimited-OCR / DeepSeek-OCR is only known to run on \
-         llama.cpp (PR #17400), vLLM, and SGLang. Ollama / LM Studio do not support these \
-         OCR models; gateways (litellm/vLLM) need --endpoint-model set to the served name."
+        "warning: remote endpoint mode requires Unlimited-OCR-2 support on the server. \
+         GGUF requires the patched llama-server; gateways (litellm/vLLM) need \
+         --endpoint-model set to the served name."
     );
 
     let endpoint = server::RemoteEndpoint {

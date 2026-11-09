@@ -9,13 +9,14 @@ fn list_cached_quants_matches_model_files_only() {
     // Empty dir = empty list.
     assert!(list_cached_quants(root).is_empty());
 
-    // Matches files following Unlimited-OCR-{quant}.gguf.
+    // Matches only v2 files, not cached v1 weights with the same quant tag.
+    fs::write(root.join("Unlimited-OCR-2-Q8_0.gguf"), b"").unwrap();
+    fs::write(root.join("Unlimited-OCR-2-BF16.gguf"), b"").unwrap();
     fs::write(root.join("Unlimited-OCR-Q8_0.gguf"), b"").unwrap();
-    fs::write(root.join("Unlimited-OCR-BF16.gguf"), b"").unwrap();
 
     // Ignores mmproj prefix and non-gguf extensions.
-    fs::write(root.join("mmproj-Unlimited-OCR-F16.gguf"), b"").unwrap();
-    fs::write(root.join("Unlimited-OCR-Q4_K_M.part"), b"").unwrap();
+    fs::write(root.join("mmproj-Unlimited-OCR-2-F16.gguf"), b"").unwrap();
+    fs::write(root.join("Unlimited-OCR-2-AD-Q4_K.part"), b"").unwrap();
     fs::write(root.join("unrelated.txt"), b"").unwrap();
 
     // Returns sorted quants.
@@ -26,37 +27,49 @@ fn list_cached_quants_matches_model_files_only() {
 }
 
 #[test]
+fn check_presence_does_not_reuse_v1_weights_or_projector() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("Unlimited-OCR-Q8_0.gguf"), b"v1").unwrap();
+    fs::write(tmp.path().join("mmproj-Unlimited-OCR-F16.gguf"), b"v1").unwrap();
+    let (model, has_model, mmproj, has_mmproj) = check_presence(tmp.path(), "Q8_0").unwrap();
+    assert_eq!(model, tmp.path().join("Unlimited-OCR-2-Q8_0.gguf"));
+    assert_eq!(mmproj, tmp.path().join("mmproj-Unlimited-OCR-2-F16.gguf"));
+    assert!(!has_model);
+    assert!(!has_mmproj);
+}
+
+#[test]
 fn check_digest_match_mismatch_and_unpinned() {
     // Stock/pinned model matches.
     assert!(matches!(
         check_digest(
-            "Unlimited-OCR-Q8_0.gguf",
-            "234c36f679a3768f5564e9e02c2c1deacbd5677b9c8558a57133f1813f6dd3b8"
+            "Unlimited-OCR-2-Q8_0.gguf",
+            "a643ec02822ce653c7aed99aa4279cc5b8cf3711be46221c460c16931b2cbfde"
         ),
         DigestCheck::Match
     ));
     // Case-tolerant hex check.
     assert!(matches!(
         check_digest(
-            "Unlimited-OCR-Q8_0.gguf",
-            "234C36F679A3768F5564E9E02C2C1DEACBD5677B9C8558A57133F1813F6DD3B8"
+            "Unlimited-OCR-2-Q8_0.gguf",
+            "A643EC02822CE653C7AED99AA4279CC5B8CF3711BE46221C460C16931B2CBFDE"
         ),
         DigestCheck::Match
     ));
     // Content mismatch.
     let bad_hash = "0000000000000000000000000000000000000000000000000000000000000000";
-    let check = check_digest("Unlimited-OCR-Q8_0.gguf", bad_hash);
+    let check = check_digest("Unlimited-OCR-2-Q8_0.gguf", bad_hash);
     if let DigestCheck::Mismatch { expected } = check {
         assert_eq!(
             expected,
-            "234c36f679a3768f5564e9e02c2c1deacbd5677b9c8558a57133f1813f6dd3b8"
+            "a643ec02822ce653c7aed99aa4279cc5b8cf3711be46221c460c16931b2cbfde"
         );
     } else {
         panic!("expected Mismatch, got {check:?}");
     }
     // Unpinned quant (custom name) proceeds without digest matching.
     assert!(matches!(
-        check_digest("Unlimited-OCR-Custom.gguf", bad_hash),
+        check_digest("Unlimited-OCR-2-Custom.gguf", bad_hash),
         DigestCheck::Unpinned
     ));
 }
@@ -127,17 +140,17 @@ fn stream_to_part_resumes_appends_from_offset() {
 }
 
 #[test]
-fn known_quants_has_13_unique_entries_all_pinned() {
+fn known_quants_has_five_unique_entries_all_pinned() {
     assert_eq!(
         KNOWN_QUANTS.len(),
-        13,
-        "README documents 13 language-model quants"
+        5,
+        "AtomicChat publishes five language-model quants"
     );
 
     let names: std::collections::HashSet<&str> = KNOWN_QUANTS.iter().map(|q| q.name).collect();
     assert_eq!(
         names.len(),
-        13,
+        5,
         "KNOWN_QUANTS must not contain duplicate quant tags"
     );
 
@@ -161,7 +174,7 @@ fn known_quants_has_13_unique_entries_all_pinned() {
     assert_eq!(tiered.len(), 3);
     assert!(tiered.contains(&"BF16"));
     assert!(tiered.contains(&"Q8_0"));
-    assert!(tiered.contains(&"Q4_K_M"));
+    assert!(tiered.contains(&"AD-Q4_K"));
 }
 
 #[test]
@@ -172,8 +185,9 @@ fn known_quants_accessor_returns_the_const_table() {
 #[test]
 fn filename_format() {
     // quant tag maps directly into the stock filename format.
-    assert_eq!(model_filename("Q8_0"), "Unlimited-OCR-Q8_0.gguf");
-    assert_eq!(model_filename("BF16"), "Unlimited-OCR-BF16.gguf");
+    assert_eq!(model_filename("Q8_0"), "Unlimited-OCR-2-Q8_0.gguf");
+    assert_eq!(model_filename("BF16"), "Unlimited-OCR-2-BF16.gguf");
+    assert_eq!(model_filename("AD-Q4_K"), "Unlimited-OCR-2-AD-Q4_K.gguf");
 }
 
 #[test]
@@ -228,13 +242,13 @@ fn ensure_with_progress_no_events_when_files_present() {
     // fire zero download events.
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path();
-    fs::write(cache.join("Unlimited-OCR-Q8_0.gguf"), b"").unwrap();
-    fs::write(cache.join("mmproj-Unlimited-OCR-F16.gguf"), b"").unwrap();
+    fs::write(cache.join("Unlimited-OCR-2-Q8_0.gguf"), b"").unwrap();
+    fs::write(cache.join("mmproj-Unlimited-OCR-2-F16.gguf"), b"").unwrap();
 
     let mut events = Vec::new();
     let files = ensure_with_progress(cache, "Q8_0", &mut |p| events.push(p)).unwrap();
-    assert_eq!(files.model, cache.join("Unlimited-OCR-Q8_0.gguf"));
-    assert_eq!(files.mmproj, cache.join("mmproj-Unlimited-OCR-F16.gguf"));
+    assert_eq!(files.model, cache.join("Unlimited-OCR-2-Q8_0.gguf"));
+    assert_eq!(files.mmproj, cache.join("mmproj-Unlimited-OCR-2-F16.gguf"));
     assert!(events.is_empty(), "cache hit should emit no events");
 }
 
@@ -242,7 +256,7 @@ fn ensure_with_progress_no_events_when_files_present() {
 fn ensure_with_overrides_uses_model_path_and_falls_back_to_cached_mmproj() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path();
-    fs::write(cache.join("mmproj-Unlimited-OCR-F16.gguf"), b"").unwrap();
+    fs::write(cache.join("mmproj-Unlimited-OCR-2-F16.gguf"), b"").unwrap();
 
     let override_model = tmp.path().join("my-custom-model.gguf");
     fs::write(&override_model, b"").unwrap();
@@ -253,7 +267,7 @@ fn ensure_with_overrides_uses_model_path_and_falls_back_to_cached_mmproj() {
     })
     .unwrap();
     assert_eq!(files.model, override_model);
-    assert_eq!(files.mmproj, cache.join("mmproj-Unlimited-OCR-F16.gguf"));
+    assert_eq!(files.mmproj, cache.join("mmproj-Unlimited-OCR-2-F16.gguf"));
     assert!(events.is_empty());
 }
 
@@ -278,7 +292,7 @@ fn ensure_with_overrides_errors_on_missing_model_path() {
 fn ensure_with_overrides_uses_mmproj_override_path() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path();
-    fs::write(cache.join("Unlimited-OCR-Q8_0.gguf"), b"").unwrap();
+    fs::write(cache.join("Unlimited-OCR-2-Q8_0.gguf"), b"").unwrap();
 
     let override_mmproj = tmp.path().join("my-custom-mmproj.gguf");
     fs::write(&override_mmproj, b"").unwrap();
@@ -288,7 +302,7 @@ fn ensure_with_overrides_uses_mmproj_override_path() {
         events.push(p)
     })
     .unwrap();
-    assert_eq!(files.model, cache.join("Unlimited-OCR-Q8_0.gguf"));
+    assert_eq!(files.model, cache.join("Unlimited-OCR-2-Q8_0.gguf"));
     assert_eq!(files.mmproj, override_mmproj);
     assert!(events.is_empty());
 }

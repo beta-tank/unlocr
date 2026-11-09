@@ -137,7 +137,7 @@ pub fn run_doctor(
     match find_llama_server(llama_override) {
         Some((path, Provenance::Managed)) => {
             println!(
-                "  [OK] llama-server: found at {} (unlocr managed R-SWA build)",
+                "  [OK] llama-server: found at {} (unlocr managed Unlimited-OCR-2 build)",
                 path.display()
             );
         }
@@ -145,17 +145,17 @@ pub fn run_doctor(
             print!("  [OK] llama-server: found at {}", path.display());
             match build_number(&path) {
                 Some(b) => println!(
-                    " (build b{b}; external -- unverified for the Unlimited-OCR R-SWA patch, PR #24975)"
+                    " (build b{b}; external -- unverified for the Unlimited-OCR-2 patch)"
                 ),
                 None => println!(
                     "\n       [WARN] external llama-server: could not parse the build version, \
-                     and cannot verify the Unlimited-OCR R-SWA patch (PR #24975)."
+                     and cannot verify the Unlimited-OCR-2 patch."
                 ),
             }
         }
         None => {
             println!(
-                "  [INFO] llama-server: no managed R-SWA build cached (auto-downloads on first run)."
+                "  [INFO] llama-server: no managed Unlimited-OCR-2 build cached (auto-downloads on first run)."
             );
             let hint_str = generate_install_hint();
             for line in hint_str.lines() {
@@ -278,7 +278,7 @@ pub fn check(
     if matches!(provenance, Provenance::External) && !allow_external_llama() {
         eprintln!(
             "warning: using an external llama-server ({}); unlocr cannot verify it includes \
-             the Unlimited-OCR Reference Sliding Window Attention patch (PR #24975). unlocr \
+             the Unlimited-OCR-2 page-2D RoPE and DASH attention patch. unlocr \
              ships a patched build -- drop --llama-bin to use it, or set \
              UNLOCR_ALLOW_EXTERNAL_LLAMA=1 to silence this.",
             llama_server.display()

@@ -5,7 +5,7 @@
 
 import { requireTauri } from "./tauri.js";
 import { formatEpoch } from "./paths.js";
-import { applyPreset, markCachedQuants, ENGINE_PRESETS } from "./model.js";
+import { applyPreset, markCachedQuants, setGgufPath, ENGINE_PRESETS } from "./model.js";
 import {
   renderEffectiveSummary,
   applyPageSelectionVisibility,
@@ -21,18 +21,6 @@ import {
 // translated here; wireSystemRequirements + SYSREQ_INFO belong to the concurrent
 // System Requirements feature and are left untouched.
 const tr = (window.unlocrI18n && window.unlocrI18n.t) || ((k) => k);
-
-/** Restore a custom-GGUF picker span (dataset.path + visible basename + tooltip)
- *  from a saved path. Mirrors model.js's private `setPath`, but does not dispatch
- *  the `unlocr:gguf-changed` event -- this is a restore, not a user pick/clear,
- *  and must not immediately re-trigger the auto-save it is itself seeding. */
-function restoreGgufSpan(spanId, path) {
-  const span = document.getElementById(spanId);
-  if (!span || !path) return;
-  span.dataset.path = path;
-  span.textContent = path.split(/[/\\]/).pop();
-  span.title = path;
-}
 
 // Serializes every patchSettings call (across all 3 writers -- Settings pane,
 // Quick Settings, Workspace auto-save) onto one chain, so a refetch-then-write
@@ -140,8 +128,8 @@ export function applySettingsToControls(s) {
   // from/to inputs show/hide correctly for a restored non-"all" mode.
   applyPageSelectionVisibility();
   // Custom GGUF paths: <span> dataset stores, not <input>.value.
-  restoreGgufSpan("modelFilePath", s.modelFile);
-  restoreGgufSpan("mmprojFilePath", s.mmprojFile);
+  setGgufPath("modelFilePath", s.modelFile);
+  setGgufPath("mmprojFilePath", s.mmprojFile);
   // Select the exact saved preset (engine_preset), not a lossy mode-based guess:
   // mode only distinguishes local/remote, but there are 5 presets (llamacpp/gpu/
   // vllm/sglang/custom), 3 of which are "remote". A pre-migration row has no
@@ -219,7 +207,7 @@ export async function wireSettings(onSaved) {
           remoteModel: (get(ids.remoteModel) && get(ids.remoteModel).value) || "",
           llamaBin: (get(ids.llamaBin) && get(ids.llamaBin).value) || "",
           defaultDpi: numOr(get(ids.defaultDpi), 144),
-          defaultMaxTokens: numOr(get(ids.defaultMaxTokens), 4096),
+          defaultMaxTokens: numOr(get(ids.defaultMaxTokens), 8000),
           // Optional persistent override; empty = use the per-run Task preset.
           defaultPrompt: (get(ids.defaultPrompt) && get(ids.defaultPrompt).value) || "",
           idleUnloadMinutes: numOrZero(ids.idleUnloadMinutes, 15),

@@ -5,8 +5,8 @@ use std::ffi::OsString;
 use std::path::Path;
 
 /// The optional DeepSeek-OCR flags must reach the spawn args only when set,
-/// and the no-flags baseline must stay byte-for-byte what it was. Mirrors the
-/// EH-0002 "prove the flag reaches the subprocess" pattern, no network/spawn.
+/// and the baseline must keep the single-sequence, bounded-context startup
+/// required by Unlimited-OCR-2, without spawning a real model.
 #[test]
 fn server_args_adds_optional_flags_only_when_set() {
     let model = Path::new("/m/model.gguf");
@@ -26,6 +26,11 @@ fn server_args_adds_optional_flags_only_when_set() {
             "/m/model.gguf",
             "--mmproj",
             "/m/mmproj.gguf",
+            "-np",
+            "1",
+            "-c",
+            "32768",
+            "--jinja",
             "--host",
             "127.0.0.1",
             "--port",
@@ -625,6 +630,7 @@ fn ocr_image_sends_dry_fields_only_when_set() {
     }
 
     let with = run_once(Some(0.8), Some(2.0));
+    assert_eq!(with["messages"][0]["content"][2]["text"], json!("p"));
     assert_eq!(with["dry_multiplier"], json!(0.8f32));
     assert_eq!(with["dry_allowed_length"], json!(4));
     assert_eq!(with["dry_base"], json!(2.0f32));
@@ -647,13 +653,14 @@ fn ocr_image_sends_dry_fields_only_when_set() {
 /// `temperature` must always be present on the wire (unlike the Option-gated
 /// DRY/repeat-penalty knobs): `None` resolves to 0 (the historical hardcoded
 /// default), and an explicit value is sent verbatim. Stub HTTP server captures
-/// the request body, mirroring `ocr_image_sends_dry_fields_only_when_set`.
+/// the request body for both transports, including the v2 page/image/instruction
+/// order and the default output budget.
 #[test]
 fn ocr_image_resolves_temperature_default_and_override() {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::sync::mpsc;
 
-    fn run_once(temperature: Option<f32>) -> serde_json::Value {
+    fn run_once(temperature: Option<f32>, stream: bool) -> serde_json::Value {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub");
         let port = listener.local_addr().unwrap().port();
         let resp_body = json!({ "choices": [{ "message": { "content": "ok" } }] }).to_string();
@@ -696,31 +703,63 @@ fn ocr_image_resolves_temperature_default_and_override() {
             api_key: None,
             model: None,
         };
-        ep.ocr_image(
-            "p",
-            "data:image/png;base64,AAAA",
-            64,
-            temperature,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .expect("ocr");
+        let opts = crate::OcrOptions::default();
+        if stream {
+            ep.ocr_image_stream(
+                &opts.prompt,
+                "data:image/png;base64,AAAA",
+                opts.max_tokens,
+                temperature,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &mut |_| true,
+                &|| false,
+            )
+            .expect("streaming ocr");
+        } else {
+            ep.ocr_image(
+                &opts.prompt,
+                "data:image/png;base64,AAAA",
+                opts.max_tokens,
+                temperature,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("ocr");
+        }
         let body = rx.recv().expect("stub recorded body");
         serde_json::from_slice(&body).expect("body is json")
     }
 
-    let default = run_once(None);
-    assert_eq!(
-        default["temperature"],
-        json!(0.0f32),
-        "None must resolve to 0, the historical hardcoded default"
-    );
+    for stream in [false, true] {
+        let default = run_once(None, stream);
+        assert_eq!(default["temperature"], json!(0.0f32));
+        assert_eq!(default["max_tokens"], json!(8000));
+        assert_eq!(
+            default["messages"],
+            json!([{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "<PAGE>" },
+                    { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } },
+                    { "type": "text", "text": "Multi page parsing." }
+                ]
+            }])
+        );
+        assert_eq!(
+            default.get("stream").and_then(serde_json::Value::as_bool),
+            stream.then_some(true)
+        );
 
-    let explicit = run_once(Some(0.7));
-    assert_eq!(explicit["temperature"], json!(0.7f32));
+        let explicit = run_once(Some(0.7), stream);
+        assert_eq!(explicit["temperature"], json!(0.7f32));
+    }
 }
 
 /// `provider_error` extracts the message from the OpenAI/vLLM/SGLang error

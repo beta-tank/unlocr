@@ -4,13 +4,13 @@
 // same readRunOptions() the Run button uses so it can never drift from the payload.
 
 // Task preset -> the user prompt actually sent. Unlimited-OCR uses NO system prompt;
-// the model needs a user-role task instruction (`<image>` is injected by llama.cpp's
-// mtmd from the image part, NOT this text). `<|grounding|>` lives only on the grounding
+// the backend wraps the image as `<PAGE>` + image + this task instruction.
+// `<|grounding|>` lives only on the grounding
 // preset (markdown + layout coordinates); the default `markdown` preset emits clean
 // markdown with no boxes. The Prompt box overrides this when non-empty. Keep in sync
 // with the CLI's Task::prompt() (src/cli_args.rs).
 export const TASK_PROMPTS = {
-  markdown: "document parsing.",
+  markdown: "Multi page parsing.",
   grounding: "<|grounding|>Convert the document to markdown.",
   free: "Free OCR.",
   figure: "Parse the figure.",
@@ -60,7 +60,7 @@ export const setVal = (id, v) => {
 
 /** Read the engine/options controls (EH-0005 bites 1 + 2) into the run_ocr invoke
  *  payload. Every control defaults to unlocr::OcrOptions::default() in the markup
- *  (quant=Q8_0, dpi=144, max_tokens=4096, keep_images=false), so a user who touches
+ *  (quant=Q8_0, dpi=144, max_tokens=8000, keep_images=false), so a user who touches
  *  nothing sends CLI-parity values. Invalid/empty numbers fall back to the same
  *  defaults so a half-typed field never crashes a run. The Prompt box is an OPTIONAL
  *  override: when empty it falls back to the selected Task preset, so a run never
@@ -82,7 +82,7 @@ export function readRunOptions() {
   const dryPenaltyLastNEl = document.getElementById("optDryPenaltyLastN");
 
   const DEFAULT_DPI = 144;
-  const DEFAULT_MAX_TOKENS = 4096;
+  const DEFAULT_MAX_TOKENS = 8000;
   // Empty Prompt box -> the selected Task preset (markdown if the select is missing).
   const taskPrompt = TASK_PROMPTS[taskEl && taskEl.value] || TASK_PROMPTS.markdown;
   const promptOr = (el, fallback) => {

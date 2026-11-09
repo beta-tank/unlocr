@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// HF repo of the full (non-GGUF) DeepSeek-OCR model. Served by vLLM, not
 /// llama.cpp; `--gpu` points the remote endpoint at a local vLLM instance
 /// serving this. See README "Run the full model on GPU" + colab/ notebook.
-pub const UNLIMITED_OCR_REPO: &str = "baidu/Unlimited-OCR";
+pub const UNLIMITED_OCR_REPO: &str = "baidu/Unlimited-OCR-2";
 /// Default base URL of a local `vllm serve` OpenAI server (`--gpu` shortcut).
 pub const VLLM_LOCAL_URL: &str = "http://localhost:8000";
 
@@ -14,7 +14,7 @@ pub const VLLM_LOCAL_URL: &str = "http://localhost:8000";
 #[command(
     name = "unlocr",
     version,
-    about = "OCR PDFs to markdown via Unlimited-OCR + llama.cpp"
+    about = "OCR PDFs to markdown via Unlimited-OCR-2 + llama.cpp"
 )]
 pub struct Args {
     /// Subcommand to execute (e.g. doctor, preflight)
@@ -70,17 +70,17 @@ pub struct Args {
     pub output_mode: OutputModeArg,
 
     /// Quality tier, an alias for a model quant:
-    /// best=BF16 (5.47GB), good=Q8_0 (2.91GB, default), less=Q4_K_M (1.82GB).
+    /// best=BF16 (5.88GB), good=Q8_0 (3.13GB, default), less=AD-Q4_K (2.02GB).
     #[arg(long, value_enum, default_value_t = Quality::Good)]
     pub quality: Quality,
 
-    /// Exact quant tag (matches Unlimited-OCR-<QUANT>.gguf), e.g. Q6_K, IQ4_XS.
+    /// Exact quant tag (matches Unlimited-OCR-2-<QUANT>.gguf), e.g. AD-Q6_K.
     /// Overrides --quality when set.
     #[arg(long)]
     pub quant: Option<String>,
 
     /// Max tokens generated per page (caps runaway generation on dense pages)
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, default_value_t = 8000)]
     pub max_tokens: u32,
 
     /// Task preset that picks the OCR prompt: markdown (clean markdown, default),
@@ -167,7 +167,7 @@ pub struct Args {
     pub model_dir: Option<PathBuf>,
 
     /// Use this model GGUF directly, skipping the HF download and the
-    /// Unlimited-OCR-<quant>.gguf naming convention. With this set,
+    /// Unlimited-OCR-2-<quant>.gguf naming convention. With this set,
     /// --quant/--quality/--model-dir no longer select the model file.
     #[arg(long)]
     pub model: Option<PathBuf>,
@@ -203,11 +203,11 @@ pub struct Args {
     #[arg(long)]
     pub endpoint_model: Option<String>,
 
-    /// Run the full (non-GGUF) Unlimited-OCR model on GPU via a local vLLM server.
+    /// Run the full (non-GGUF) Unlimited-OCR-2 model on GPU via a local vLLM server.
     /// Shortcut: when set and --endpoint is unset, defaults --endpoint to
-    /// http://localhost:8000 and --endpoint-model to baidu/Unlimited-OCR.
+    /// http://localhost:8000 and --endpoint-model to baidu/Unlimited-OCR-2.
     /// Start the server first (see README "Run the full model on GPU"): vllm serve
-    /// baidu/Unlimited-OCR. A Colab notebook (colab/) wires this end to end.
+    /// baidu/Unlimited-OCR-2.
     #[arg(long)]
     pub gpu: bool,
 }
@@ -225,7 +225,7 @@ pub enum Commands {
         #[arg(long)]
         model_dir: Option<PathBuf>,
 
-        /// Exact quant tag (matches Unlimited-OCR-<QUANT>.gguf), e.g. Q8_0, Q4_K_M.
+        /// Exact quant tag (matches Unlimited-OCR-2-<QUANT>.gguf), e.g. Q8_0, AD-Q4_K.
         #[arg(long, default_value = "Q8_0")]
         quant: String,
     },
@@ -239,23 +239,23 @@ pub enum Commands {
         #[arg(long)]
         model_dir: Option<PathBuf>,
 
-        /// Exact quant tag (matches Unlimited-OCR-<QUANT>.gguf), e.g. Q8_0, Q4_K_M.
+        /// Exact quant tag (matches Unlimited-OCR-2-<QUANT>.gguf), e.g. Q8_0, AD-Q4_K.
         #[arg(long, default_value = "Q8_0")]
         quant: String,
     },
 }
 
 /// Quality tiers for selecting the GGUF model quantization level. A friendly
-/// 3-way alias over the full 13-quant lineup in `unlocr::model::KNOWN_QUANTS`
+/// 3-way alias over the five-quant lineup in `unlocr::model::KNOWN_QUANTS`
 /// (`tier` field there cross-references these same 3 tags) -- keep the two in
 /// sync if a tier's underlying quant ever changes.
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
 pub enum Quality {
-    /// BF16 (5.47GB), highest fidelity
+    /// BF16 (5.88GB), highest fidelity
     Best,
-    /// Q8_0 (2.91GB), near-lossless
+    /// Q8_0 (3.13GB), near-lossless
     Good,
-    /// Q4_K_M (1.82GB), smallest/fastest
+    /// AD-Q4_K (2.02GB), smallest
     Less,
 }
 
@@ -265,7 +265,7 @@ impl Quality {
         match self {
             Quality::Best => "BF16",
             Quality::Good => "Q8_0",
-            Quality::Less => "Q4_K_M",
+            Quality::Less => "AD-Q4_K",
         }
     }
 }
@@ -290,7 +290,7 @@ impl Task {
     pub fn prompt(self) -> &'static str {
         match self {
             // Keep in sync with OcrOptions::default().prompt (the no-flags default).
-            Task::Markdown => "document parsing.",
+            Task::Markdown => "Multi page parsing.",
             Task::Grounding => "<|grounding|>Convert the document to markdown.",
             Task::Free => "Free OCR.",
             Task::Figure => "Parse the figure.",

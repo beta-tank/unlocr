@@ -69,7 +69,7 @@ export function makeFileRail() {
     const tr = (window.unlocrI18n && window.unlocrI18n.t) || ((k) => k);
     if (engineLabel) {
       const quant = (report && report.quant) || "Q8_0";
-      let label = "Unlimited-OCR · " + quant;
+      let label = "Unlimited-OCR-2 · " + quant;
       if (external) label += " · " + tr("pipeline.externalLlama");
       engineLabel.textContent = label;
       engineLabel.title = external ? tr("pipeline.externalLlamaHint") : "";

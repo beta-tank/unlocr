@@ -1,6 +1,6 @@
 # unlocr CLI 参考指南
 
-`unlocr` 是一个快速、本地运行的命令行工具（CLI）和桌面 GUI，旨在将 PDF 文件和图像 OCR 转换为干净的 Markdown。它由 **Unlimited-OCR** (DeepSeek-OCR 3B VLM) 模型提供动力。
+`unlocr` 是一个快速、本地运行的命令行工具（CLI）和桌面 GUI，旨在将 PDF 文件和图像 OCR 转换为干净的 Markdown。它由 **Unlimited-OCR-2** 模型提供动力，GGUF 权重来自 [AtomicChat](https://huggingface.co/AtomicChat/Unlimited-OCR-2-GGUF)。
 
 本篇文档详细介绍了如何通过命令行界面（CLI）安装、配置和运行 `unlocr`。
 
@@ -45,7 +45,7 @@ unlocr report.pdf --quality best
 # 标准预设 (Q8_0 模型 - ~2.91 GB 下载，默认值)
 unlocr report.pdf --quality good
 
-# 快速 / 轻量级 (Q4_K_M 模型 - ~1.82 GB 下载)
+# 轻量级 (AD-Q4_K 模型 - ~2.02 GB 下载)
 unlocr report.pdf --quality less
 ```
 
@@ -84,8 +84,8 @@ unlocr doctor
 
 | 选项 | 类型 | 默认值 | 描述 |
 |:---|:---|:---|:---|
-| `--quality <TIER>` | 枚举 | `good` | 质量预设标签：`best` (BF16), `good` (Q8_0), 或 `less` (Q4_K_M)。 |
-| `--quant <TAG>` | 字符串 | 无 | 选择精确的 Hugging Face 量化标签（例如 `Q6_K`, `IQ4_XS`）。会覆盖 `--quality`。 |
+| `--quality <TIER>` | 枚举 | `good` | 质量预设标签：`best` (BF16), `good` (Q8_0), 或 `less` (AD-Q4_K)。 |
+| `--quant <TAG>` | 字符串 | 无 | 选择精确的 Hugging Face 量化标签（BF16、Q8_0、AD-Q6_K、AD-Q5_K、AD-Q4_K）。会覆盖 `--quality`。 |
 | `--model <PATH>` | 路径 | 无 | 跳过 HF 下载，直接运行本地的模型 GGUF 文件。这会禁用 `--quant` 和 `--quality`。 |
 | `--mmproj <PATH>` | 路径 | 无 | 自定义多模态投影器（`mmproj`）GGUF 的路径。*需要配合 `--model` 使用。* |
 | `--model-dir <PATH>` | 路径 | *系统缓存* | 存放下载的 GGUF 模型文件的自定义缓存目录。 |
@@ -103,7 +103,7 @@ unlocr doctor
 
 | 选项 | 类型 | 默认值 | 描述 |
 |:---|:---|:---|:---|
-| `--max-tokens <N>` | 整数 | `4096` | 每页生成的最大 Token 数。有助于终止生成失控。 |
+| `--max-tokens <N>` | 整数 | `8000` | 每页生成的最大 Token 数。有助于终止生成失控。 |
 | `--temperature <F>` | 浮点数 | `0.0` | 采样温度。`0.0` 会强制输出确定性的 OCR 结果（推荐）。 |
 | `--image-max-tokens <N>` | 整数 | 无 | `llama-server` 的视觉 Token 预算。较高的值会保留更精细的文本细节，但会增加 VRAM 和计算开销。 |
 | `--chat-template <NAME>` | 字符串 | 无 | 向 `llama-server` 传递自定义聊天模板名称（例如 `deepseek-ocr`）。 |
@@ -124,7 +124,7 @@ unlocr doctor
 
 | 选项 | 类型 | 默认值 | 描述 |
 |:---|:---|:---|:---|
-| `--gpu` | 标志 | `false` | 针对本地 vLLM 服务器运行 OCR 的快捷方式（等同于 `--endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR`）。 |
+| `--gpu` | 标志 | `false` | 针对兼容的本地服务器运行 OCR 的快捷方式（等同于 `--endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR-2`）。 |
 | `--endpoint <URL>` | 字符串 | 无 | 兼容 OpenAI 格式的服务器 API 基础 URL（例如 `http://localhost:8080/v1`）。跳过本地模型启动。 |
 | `--endpoint-key <KEY>` | 字符串 | 无 | 远程端点的 Bearer Token。会覆盖 `UNLOCR_API_KEY` 环境变量。 |
 | `--endpoint-model <M>` | 字符串 | 无 | 请求体中发送的目标模型标识符（vLLM 或 SGLang 需要此项）。 |
@@ -183,15 +183,10 @@ unlocr --from-list inputs.txt --password-file passwords.txt --out ./output_md
     ```
 
 ### 4. 远程调用 GPU 上的 vLLM 服务
-要将 OCR 任务分流到部署了未量化完整 `DeepSeek-OCR` 模型的 GPU 服务器上：
+要将 OCR 任务分流到部署了完整 `Unlimited-OCR-2` 模型的兼容 GPU 服务器上：
 
-1.  **在 GPU 主机上启动 vLLM 服务**：
-    ```bash
-    vllm serve baidu/Unlimited-OCR \
-      --no-enable-prefix-caching \
-      --mm-processor-cache-gb 0 \
-      --logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
-    ```
+1.  **在 GPU 主机上启动兼容服务**：按照该后端的 Unlimited-OCR-2 配置说明，
+    提供 `baidu/Unlimited-OCR-2` 模型。
 2.  **让本地 `unlocr` 调用该远程服务**：
     ```bash
     # 本地 vLLM localhost:8000 快捷方式
@@ -200,7 +195,7 @@ unlocr --from-list inputs.txt --password-file passwords.txt --out ./output_md
     # 或者配置显式远程地址
     unlocr document.pdf \
       --endpoint http://your-gpu-server:8000 \
-      --endpoint-model baidu/Unlimited-OCR
+      --endpoint-model baidu/Unlimited-OCR-2
     ```
 
 ---

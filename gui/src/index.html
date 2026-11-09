@@ -175,7 +175,7 @@
                      from the report's tool + model flags. -->
                 <div class="pipeline" id="pipeline" aria-live="polite">
                   <div class="panel__head"><span class="panel__label" data-i18n="label.ocrPipeline">OCR Pipeline</span></div>
-                  <div class="pipeline__engine" id="pipelineEngine">Unlimited-OCR &middot; —</div>
+                  <div class="pipeline__engine" id="pipelineEngine">Unlimited-OCR-2 &middot; —</div>
                   <ul class="pipeline__stages" id="pipelineStages">
                     <li class="stage" data-stage="tools">
                       <span class="stage__dot"></span><span class="stage__name" data-i18n="pipeline.tools">Tools (llama-server, pdftoppm)</span>
@@ -232,7 +232,7 @@
                   <div class="transcript__engine-row">
                     <select class="opts__select" id="enginePreset">
                       <option value="llamacpp" selected data-i18n="engine.llamacpp">llama.cpp (managed local)</option>
-                      <option value="gpu" data-i18n="engine.gpu">GPU full model (vLLM · Unlimited-OCR)</option>
+                      <option value="gpu" data-i18n="engine.gpu">GPU full model (vLLM · Unlimited-OCR-2)</option>
                       <option value="vllm" data-i18n="engine.vllm">vLLM (http://127.0.0.1:8000)</option>
                       <option value="sglang" data-i18n="engine.sglang">SGLang (http://127.0.0.1:30000)</option>
                       <option value="custom" data-i18n="engine.custom">Custom endpoint</option>
@@ -241,10 +241,10 @@
                   </div>
                   <!-- The full (non-GGUF) model runs on vLLM, not llama.cpp. This
                        preset just points the remote endpoint at a local vLLM serving
-                       baidu/Unlimited-OCR; you must start that server yourself
+                       baidu/Unlimited-OCR-2; you must start that server yourself
                        (16GB+ VRAM). See the Colab notebook / README for the command. -->
                   <span class="opts__hint" id="gpuHint" hidden>
-                    Needs a local <code>vllm serve baidu/Unlimited-OCR</code> (16GB+ VRAM).
+                    Needs a compatible server serving <code>baidu/Unlimited-OCR-2</code>.
                     See the README "Run the full model on GPU" section and the Colab notebook.
                   </span>
                 </div>
@@ -262,7 +262,7 @@
                 </div>
                 <!-- EH-0005 bite 1: engine/options controls that drive the run.
                      Each control defaults to unlocr::OcrOptions::default()
-                     (quant=Q8_0, max_tokens=4096, dpi=144, keep_images=false) so a
+                      (quant=Q8_0, max_tokens=8000, dpi=144, keep_images=false) so a
                      user who touches nothing gets CLI-parity behavior. main.js reads
                      these and forwards them into the run_ocr invoke payload. The
                      editable prompt lives in bite 2 (it gets its own row here). -->
@@ -272,7 +272,7 @@
                     <label class="opts__field">
                       <span class="opts__label" data-i18n="opts.quant">Quant</span>
                       <!-- Options populated at boot from list_available_quants (model.js
-                           populateQuantSelects): all 13 published quants, cached state
+                           populateQuantSelects): all five published quants, cached state
                            marked, not just the 3 CLI Quality tiers. -->
                       <select class="opts__select" id="optQuant"></select>
                       <!-- Q4_K_M is known to loop on dense pages; steer users to a
@@ -312,7 +312,7 @@
                     <div class="opts__grid">
                     <label class="opts__field">
                       <span class="opts__label" data-i18n="opts.maxTokens">Max tokens</span>
-                      <input class="opts__num" id="optMaxTokens" type="number" min="256" max="32768" step="1" value="4096" />
+                      <input class="opts__num" id="optMaxTokens" type="number" min="256" max="32768" step="1" value="8000" />
                     </label>
                     <!-- DeepSeek-OCR detail knob (--image-max-tokens). Startup-only:
                          applies on the next model Load, not mid-run. Blank = model
@@ -439,7 +439,7 @@
                      change + once on load. -->
                 <div class="effective" id="effectiveSummary" aria-live="polite">
                   <span class="effective__label" data-i18n="label.effective">Effective</span>
-                  <span class="effective__vals" id="effectiveVals">Q8_0 &middot; 144 DPI &middot; 4096 tok &middot; keep images off</span>
+                  <span class="effective__vals" id="effectiveVals">Q8_0 &middot; 144 DPI &middot; 8000 tok &middot; keep images off</span>
                 </div>
                 <div class="transcript__run">
                   <button class="run-btn" id="runBtn" type="button">Run OCR</button>
@@ -651,7 +651,7 @@
                     <input class="path-input" id="setRemoteModel" type="text" spellcheck="false"
                       placeholder="required by LiteLLM/vLLM gateways; optional for a bare llama-server" />
                   </label>
-                  <p class="settings__note" data-i18n="note.supportedBackends">Only llama.cpp (PR #17400), vLLM, and SGLang are known to support Unlimited-OCR / DeepSeek-OCR. Ollama and LM Studio do not support these OCR models.</p>
+                  <p class="settings__note" data-i18n="note.supportedBackends">Unlimited-OCR-2 requires a compatible backend. For GGUF, use the managed llama-server with the Unlimited-OCR-2 patch; stock llama.cpp builds do not support this architecture yet.</p>
                   <label class="opts__field opts__field--full">
                     <span class="opts__label" data-i18n="settings.llamaBin">llama-server path (optional override)</span>
                     <input class="path-input" id="setLlamaBin" type="text" spellcheck="false"
@@ -664,7 +664,7 @@
                 </label>
                 <label class="opts__field">
                   <span class="opts__label" data-i18n="settings.defaultMaxTokens">Default max tokens</span>
-                  <input class="opts__num" id="setMaxTokens" type="number" min="256" max="32768" step="1" value="4096" />
+                  <input class="opts__num" id="setMaxTokens" type="number" min="256" max="32768" step="1" value="8000" />
                 </label>
                 <label class="opts__field">
                   <span class="opts__label" data-i18n="settings.idleUnload">Idle unload (min, 0 = never)</span>
@@ -791,22 +791,25 @@
           placeholder="API key (optional)" />
         <input class="path-input" id="remoteModel" type="text" spellcheck="false"
           placeholder="model name (LiteLLM/vLLM gateways; optional for bare llama-server)" />
-        <p class="settings__note" data-i18n="note.supportedBackendsShort">Only llama.cpp (PR #17400), vLLM, and SGLang are known to support Unlimited-OCR / DeepSeek-OCR. Ollama and LM Studio do not.</p>
+        <p class="settings__note" data-i18n="note.supportedBackendsShort">Unlimited-OCR-2 requires llama.cpp b11913 (7aca0d2) with the page-2D RoPE and DASH attention patch. Local mode automatically downloads the managed llama-server build. Remote servers must support Unlimited-OCR-2.</p>
       </div>
       <!-- Custom-GGUF override (local mode only; toggled by applyPreset).
            Pick a model GGUF to skip the HF download + quant naming; the
-           projector picker is optional (omit to use the stock one). Click
-           a chosen path to clear it. Wired in model.js wireGgufPicker(). -->
+           projector picker is optional (omit to use the stock one). Each path
+           has a Clear button. Wired in model.js wireGgufPicker(). -->
       <div class="model-bar__local" id="localFields">
         <div class="model-bar__row">
           <button class="model-btn model-btn--ghost" id="pickModelBtn" type="button" data-i18n="engine.customGguf">Custom model GGUF…</button>
           <span class="model-bar__status" id="modelFilePath" title="">none</span>
+          <button class="model-btn model-btn--ghost" id="modelFilePathClear" type="button" disabled data-i18n="action.clear" aria-label="Clear custom model GGUF" data-i18n-aria="engine.clearModel">Clear</button>
         </div>
         <div class="model-bar__row">
           <button class="model-btn model-btn--ghost" id="pickMmprojBtn" type="button" data-i18n="engine.customMmproj">Custom projector (mmproj)…</button>
           <span class="model-bar__status" id="mmprojFilePath" title="">none</span>
+          <button class="model-btn model-btn--ghost" id="mmprojFilePathClear" type="button" disabled data-i18n="action.clear" aria-label="Clear custom projector" data-i18n-aria="engine.clearProjector">Clear</button>
         </div>
-        <p class="settings__note" data-i18n="engine.customFieldsNote">Both optional. A custom model GGUF skips the HF download and the quant control. The projector is independent; leave it blank to use the stock one.</p>
+        <p class="settings__note" data-i18n="engine.customFieldsNote">Both optional. A custom model GGUF overrides the selected quant; the projector is independent. Clear both selections and load the model again to use the selected AtomicChat Unlimited-OCR-2 quant and its default projector (downloaded automatically if missing).</p>
+        <p class="settings__note" data-i18n="note.supportedBackendsShort">Unlimited-OCR-2 requires llama.cpp b11913 (7aca0d2) with the page-2D RoPE and DASH attention patch. Local mode automatically downloads the managed llama-server build. Remote servers must support Unlimited-OCR-2.</p>
       </div>
       <form method="dialog" class="engine-dialog__actions">
         <button class="model-btn" value="done" type="submit" data-i18n="action.done">Done</button>
@@ -916,7 +919,7 @@
         </label>
         <label class="opts__field">
           <span class="opts__label" data-i18n="settings.defaultMaxTokens">Default max tokens</span>
-          <input class="opts__num" id="qsMaxTokens" type="number" min="256" max="32768" step="1" value="4096" />
+          <input class="opts__num" id="qsMaxTokens" type="number" min="256" max="32768" step="1" value="8000" />
         </label>
         <label class="opts__field opts__field--full">
           <span class="opts__label" data-i18n="settings.defaultPrompt">Default prompt override (optional)</span>

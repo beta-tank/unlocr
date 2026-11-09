@@ -79,12 +79,12 @@ fn expand_glob_and_literal() {
 fn quality_quant_mapping() {
     assert_eq!(Quality::Best.quant(), "BF16");
     assert_eq!(Quality::Good.quant(), "Q8_0");
-    assert_eq!(Quality::Less.quant(), "Q4_K_M");
+    assert_eq!(Quality::Less.quant(), "AD-Q4_K");
 }
 
 #[test]
 fn task_prompt_mapping() {
-    assert_eq!(Task::Markdown.prompt(), "document parsing.");
+    assert_eq!(Task::Markdown.prompt(), "Multi page parsing.");
     assert_eq!(
         Task::Grounding.prompt(),
         "<|grounding|>Convert the document to markdown."
@@ -133,13 +133,13 @@ fn gpu_flag_fills_remote_defaults() {
     let mut args = Args::parse_from(["unlocr", "x.pdf", "--gpu"]);
     args.apply_gpu_defaults();
     assert_eq!(args.endpoint.as_deref(), Some("http://localhost:8000"));
-    assert_eq!(args.endpoint_model.as_deref(), Some("baidu/Unlimited-OCR"));
+    assert_eq!(args.endpoint_model.as_deref(), Some("baidu/Unlimited-OCR-2"));
 
     // An explicit --endpoint wins; --gpu only fills the model default.
     let mut args = Args::parse_from(["unlocr", "x.pdf", "--gpu", "--endpoint", "http://host:9000"]);
     args.apply_gpu_defaults();
     assert_eq!(args.endpoint.as_deref(), Some("http://host:9000"));
-    assert_eq!(args.endpoint_model.as_deref(), Some("baidu/Unlimited-OCR"));
+    assert_eq!(args.endpoint_model.as_deref(), Some("baidu/Unlimited-OCR-2"));
 
     // No --gpu = no remote defaults injected (stays local GGUF path).
     let mut args = Args::parse_from(["unlocr", "x.pdf"]);

@@ -1,6 +1,6 @@
 # unlocr CLI Reference
 
-`unlocr` is a fast, local CLI tool and desktop GUI designed to OCR PDF files and images into clean Markdown. It is powered by the **Unlimited-OCR** (DeepSeek-OCR 3B VLM) model.
+`unlocr` is a fast, local CLI tool and desktop GUI designed to OCR PDF files and images into clean Markdown. It is powered by **Unlimited-OCR-2**, with GGUF weights from [AtomicChat](https://huggingface.co/AtomicChat/Unlimited-OCR-2-GGUF).
 
 This document details how to install, configure, and run `unlocr` using the command-line interface.
 
@@ -45,7 +45,7 @@ unlocr report.pdf --quality best
 # Standard preset (Q8_0 model - ~2.91 GB download, Default)
 unlocr report.pdf --quality good
 
-# Fast / Lightweight (Q4_K_M model - ~1.82 GB download)
+# Lightweight (AD-Q4_K model - ~2.02 GB download)
 unlocr report.pdf --quality less
 ```
 
@@ -84,8 +84,8 @@ unlocr doctor
 
 | Option | Type | Default | Description |
 |:---|:---|:---|:---|
-| `--quality <TIER>` | Enum | `good` | Quality preset tag: `best` (BF16), `good` (Q8_0), or `less` (Q4_K_M). |
-| `--quant <TAG>` | String | None | Select an exact Hugging Face quant tag (e.g., `Q6_K`, `IQ4_XS`). Overrides `--quality`. |
+| `--quality <TIER>` | Enum | `good` | Quality preset tag: `best` (BF16), `good` (Q8_0), or `less` (AD-Q4_K). |
+| `--quant <TAG>` | String | None | Select an exact Hugging Face quant tag (BF16, Q8_0, AD-Q6_K, AD-Q5_K, AD-Q4_K). Overrides `--quality`. |
 | `--model <PATH>` | Path | None | Skip HF download and run a local model GGUF file directly. Disables `--quant` and `--quality`. |
 | `--mmproj <PATH>` | Path | None | Path to a custom projector (`mmproj`) GGUF. *Requires `--model`.* |
 | `--model-dir <PATH>` | Path | *OS Cache* | Custom cache directory for GGUF model files. |
@@ -103,7 +103,7 @@ unlocr doctor
 
 | Option | Type | Default | Description |
 |:---|:---|:---|:---|
-| `--max-tokens <N>` | Integer | `4096` | Max tokens generated per page. Helps terminate runaways. |
+| `--max-tokens <N>` | Integer | `8000` | Max tokens generated per page. Helps terminate runaways. |
 | `--temperature <F>` | Float | `0.0` | Sampling temperature. `0.0` forces deterministic OCR output (recommended). |
 | `--image-max-tokens <N>` | Integer | None | Vision-token budget for `llama-server`. Higher values yield finer text details but increase VRAM/computation. |
 | `--chat-template <NAME>` | String | None | Pass a custom chat template name (e.g. `deepseek-ocr`) to `llama-server`. |
@@ -124,7 +124,7 @@ unlocr doctor
 
 | Option | Type | Default | Description |
 |:---|:---|:---|:---|
-| `--gpu` | Flag | `false` | Shortcut to run OCR against a local vLLM server (`--endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR`). |
+| `--gpu` | Flag | `false` | Shortcut to run OCR against a compatible local server (`--endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR-2`). |
 | `--endpoint <URL>` | String | None | OpenAI-compatible server API base URL (e.g. `http://localhost:8080/v1`). Skips local model spawning. |
 | `--endpoint-key <KEY>` | String | None | Bearer token for the endpoint. Overrides `UNLOCR_API_KEY` environment variable. |
 | `--endpoint-model <M>` | String | None | Target model identifier in the JSON request body (required by vLLM or SGLang). |
@@ -183,15 +183,10 @@ unlocr --from-list inputs.txt --password-file passwords.txt --out ./output_md
     ```
 
 ### 4. Running a Remote vLLM Server on GPU
-To offload OCR tasks to a GPU server running the full unquantized `DeepSeek-OCR` model:
+To offload OCR tasks to a compatible GPU server running the full `Unlimited-OCR-2` model:
 
-1.  **Launch the vLLM server** (on your GPU host):
-    ```bash
-    vllm serve baidu/Unlimited-OCR \
-      --no-enable-prefix-caching \
-      --mm-processor-cache-gb 0 \
-      --logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
-    ```
+1.  **Launch a compatible server** on your GPU host using its Unlimited-OCR-2
+    setup instructions, serving `baidu/Unlimited-OCR-2`.
 2.  **Run `unlocr` pointing to this server**:
     ```bash
     # Shortcut to localhost:8000
@@ -200,7 +195,7 @@ To offload OCR tasks to a GPU server running the full unquantized `DeepSeek-OCR`
     # Or explicitly configuration
     unlocr document.pdf \
       --endpoint http://your-gpu-server:8000 \
-      --endpoint-model baidu/Unlimited-OCR
+      --endpoint-model baidu/Unlimited-OCR-2
     ```
 
 ---

@@ -20,6 +20,8 @@ let modelLoaded = false;
 // late-arriving server-ready event cannot clobber the resting "Loaded: ..." text
 // after refreshModelStatus has already set it.
 let loadingModel = false;
+// Keep startup errors visible across model_status refreshes (including finally).
+let modelLoadError = null;
 
 // Load-phase "still alive" feedback. The backend emits ocr://status ("loading
 // model into memory…") ONCE, then Server::start blocks in await_health for 30-90s
@@ -68,7 +70,7 @@ function startLoadFeedback(baseMsg) {
 
 /** Paint the titlebar model-light + label from a model_status payload. This is
  *  the single at-a-glance status (the model-bar text below carries detail):
- *  green dot + the loaded model label (e.g. "Unlimited-OCR Q8_0") for a local
+ *  green dot + the loaded model label (e.g. "Unlimited-OCR-2 Q8_0") for a local
  *  model, violet dot + the label for a remote endpoint, gray dot + "No model"
  *  when nothing is loaded. The dot color carries loaded/idle/remote state, so
  *  no "Local"/"Loaded:" prefix is needed. */
@@ -109,7 +111,9 @@ export async function refreshModelStatus(ui) {
   if (unloadBtn) unloadBtn.disabled = !status.loaded;
   if (loadBtn) loadBtn.textContent = status.loaded ? tr("model.reload") : tr("model.load");
   if (statusText) {
-    statusText.textContent = status.loaded ? tr("model.loadedLabel", { label: status.label }) : tr("model.noModelLoaded");
+    statusText.textContent = modelLoadError !== null
+      ? tr("model.loadFailed", { error: modelLoadError })
+      : status.loaded ? tr("model.loadedLabel", { label: status.label }) : tr("model.noModelLoaded");
   }
   // Upgrade the unloaded "Load model" label to "Download & load model" when the
   // selected local quant is not yet cached (best-effort; loaded state is left).
@@ -155,9 +159,9 @@ async function updateLoadLabel() {
 // (possibly prefilled) #remoteUrl, so presets need no extra plumbing.
 export const ENGINE_PRESETS = {
   llamacpp: { mode: "local", url: null },
-  // Full (non-GGUF) Unlimited-OCR on GPU: same remote path as vllm, but also
+  // Full (non-GGUF) Unlimited-OCR-2 on GPU: same remote path as vllm, but also
   // prefills the served model name so the user does not have to know the repo id.
-  gpu: { mode: "remote", url: "http://127.0.0.1:8000", model: "baidu/Unlimited-OCR" },
+  gpu: { mode: "remote", url: "http://127.0.0.1:8000", model: "baidu/Unlimited-OCR-2" },
   // model: "" = clear the field (so a stale gpu name is not sent); user types their
   // own served name. custom/llamacpp omit `model` entirely = leave the field as-is
   // (preserves a value restored from saved settings).
@@ -239,24 +243,31 @@ function pickedGguf(spanId) {
   return p && p.trim() ? p : null;
 }
 
+/** Render a GGUF override, including its Clear button. Used by both the picker
+ *  and settings restore; rendering alone must not trigger an auto-save. */
+export function setGgufPath(spanId, path) {
+  const span = document.getElementById(spanId);
+  if (!span) return;
+  const selected = typeof path === "string" && path.trim() ? path : "";
+  if (selected) span.dataset.path = selected;
+  else delete span.dataset.path;
+  span.textContent = selected ? selected.split(/[/\\]/).pop() : tr("model.none");
+  span.title = selected;
+  const clearBtn = document.getElementById(spanId + "Clear");
+  if (clearBtn) clearBtn.disabled = !selected;
+}
+
 /** Wire one GGUF file picker: clicking the button opens the native dialog
  *  (tauri-plugin-dialog, same as the PDF importer) filtered to .gguf, and the
  *  chosen path is stored on the paired span (dataset.path + visible basename).
- *  Clicking the span clears the selection. No-op outside the Tauri shell. */
+ *  The explicit Clear button resets the override. Clicking the path also clears
+ *  it for compatibility with the previous UI. */
 function wireGgufPicker(btnId, spanId, label) {
   const btn = document.getElementById(btnId);
   const span = document.getElementById(spanId);
   if (!btn || !span) return;
   const setPath = (p) => {
-    if (p) {
-      span.dataset.path = p;
-      span.textContent = p.split(/[/\\]/).pop();
-      span.title = p;
-    } else {
-      delete span.dataset.path;
-      span.textContent = tr("model.none");
-      span.title = "";
-    }
+    setGgufPath(spanId, p);
     // A custom model GGUF skips the download, so the Load label drops the
     // "Download &" prefix; clearing it restores the cached/uncached label.
     updateLoadLabel();
@@ -265,7 +276,10 @@ function wireGgufPicker(btnId, spanId, label) {
     // be circular). A plain DOM event is the decoupling seam.
     span.dispatchEvent(new CustomEvent("unlocr:gguf-changed", { bubbles: true }));
   };
-  setPath(null);
+  // Initialize without clearing a restored path or firing a save on startup.
+  setGgufPath(spanId, pickedGguf(spanId));
+  const clearBtn = document.getElementById(spanId + "Clear");
+  if (clearBtn) clearBtn.addEventListener("click", () => setPath(null));
   btn.addEventListener("click", async () => {
     const dialog = window.__TAURI__ && window.__TAURI__.dialog;
     if (!dialog || !dialog.open) return;
@@ -325,6 +339,8 @@ export function wireModelBar(ui) {
       const imtVal = imtEl ? parseInt(imtEl.value || "", 10) : NaN;
       loadBtn.disabled = true;
       if (unloadBtn) unloadBtn.disabled = true;
+      modelLoadError = null;
+      removeToast("load:error");
       if (statusText) statusText.textContent = tr("model.loading");
       loadingModel = true;
       try {
@@ -352,7 +368,11 @@ export function wireModelBar(ui) {
         updateModeBadge(status);
         if (statusText) statusText.textContent = tr("model.loadedLabel", { label: status.label });
       } catch (err) {
-        if (statusText) statusText.textContent = tr("model.loadFailed", { error: String(err) });
+        modelLoadError = String(err);
+        const message = tr("model.loadFailed", { error: modelLoadError });
+        if (statusText) statusText.textContent = message;
+        showToast("load:error", { kind: "error", title: message });
+        console.error("[model] load failed", err);
       } finally {
         // Load resolved (success line above / catch). Kill the heartbeat + its
         // toast now so a pending tick cannot overwrite the final "Loaded: ..."
@@ -381,6 +401,8 @@ export function wireModelBar(ui) {
       // refreshModelStatus lands "No model loaded". loadingModel is false here,
       // so the gated load listeners cannot overwrite this.
       loadingModel = false;
+      modelLoadError = null;
+      removeToast("load:error");
       if (statusText) statusText.textContent = tr("model.stopping");
       updateModeBadge({ loaded: false, mode: "", label: "" });
       try {
@@ -426,14 +448,14 @@ export function attachLoadListeners() {
 }
 
 /** Format a quant's display label: "good (Q8_0)"-style when the backend
- *  supplies a best/good/less tier alias, else just the raw quant tag (the 10
+ *  supplies a best/good/less tier alias, else just the raw quant tag (the two
  *  quants with no CLI Quality alias). */
 export function quantTierLabel(name, tier) {
   return tier ? tr("tier.format", { tier: tr("tier." + tier), quant: name }) : name;
 }
 
 /** Rebuild the 3 quant `<select>`s (`#optQuant`, `#setQuant`, `#qsQuant`) from
- *  the backend's full published lineup (list_available_quants: all 13 quants,
+ *  the backend's full published lineup (list_available_quants: all five quants,
  *  not just the 3 CLI Quality tiers), marking each already-cached option.
  *  Replaces the previously-static `<option>` lists in index.html. Preserves
  *  each select's current selection when it's still an available quant, else

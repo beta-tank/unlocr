@@ -89,9 +89,9 @@ impl Default for OcrOptions {
     fn default() -> Self {
         OcrOptions {
             quant: "Q8_0".to_string(),
-            max_tokens: 4096,
+            max_tokens: 8000,
             dpi: 144,
-            prompt: "document parsing.".to_string(),
+            prompt: "Multi page parsing.".to_string(),
             port: 0,
             model_dir: None,
             keep_images: false,

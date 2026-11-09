@@ -28,7 +28,7 @@ GUI/CLI for unlimited-ocr
 
 **与 Unlimited OCR 无官方关联，仅为其封装库/GUI。**
 
-一个快速、轻量级的工具，用于将 PDF OCR 转换为干净的 Markdown。它由本地通过 **`llama.cpp`** (GGUF) 运行的 **[Unlimited-OCR](https://huggingface.co/sahilchachra/Unlimited-OCR-GGUF)** 模型 (DeepSeek-OCR 3B VLM) 提供动力。
+一个快速、轻量级的工具，用于将 PDF OCR 转换为干净的 Markdown。它由本地通过 **`llama.cpp`** 运行的 **[Unlimited-OCR-2](https://huggingface.co/AtomicChat/Unlimited-OCR-2-GGUF)**（AtomicChat GGUF 权重）提供动力。
 
 目前仍在开发中 (WIP)，系统要求较高。请勿指望它能在低配置设备上运行。创建此项目的目的是为了在本地计算机上使用 unlimited-ocr，它与原版 unlimited-ocr 无关联。
 
@@ -71,10 +71,15 @@ GUI/CLI for unlimited-ocr
 
 | 模式 | 变体 | 下载大小 | 所需 RAM/VRAM | 引擎 | 质量标志 |
 |------|---------|---------------|-------------------|--------|--------------|
-| **GGUF** | `Q4_K_M` | 1.82 GB | ~4 GB RAM | llama.cpp | `--quality less` |
-| **GGUF** | `Q8_0` *(默认)* | 2.91 GB | ~6 GB RAM | llama.cpp | `--quality good` |
-| **GGUF** | `BF16` | 5.47 GB | ~8 GB RAM | llama.cpp | `--quality best` |
-| **完整模型** | `DeepSeek-OCR` | ~6.7 GB | 16 GB+ VRAM | vLLM | `--gpu` |
+| **GGUF** | `AD-Q4_K` | 2.02 GB | ~4 GB RAM | llama.cpp | `--quality less` |
+| **GGUF** | `Q8_0` *(默认)* | 3.13 GB | ~6 GB RAM | llama.cpp | `--quality good` |
+| **GGUF** | `BF16` | 5.88 GB | ~8 GB RAM | llama.cpp | `--quality best` |
+| **完整模型** | `Unlimited-OCR-2` | ~6.7 GB | 16 GB+ VRAM | 兼容的远程服务器 | `--gpu` |
+
+AtomicChat 还提供 `AD-Q6_K`（2.74 GB）和 `AD-Q5_K`（2.28 GB），可通过
+`--quant` 选择。所有量化版本都使用 `mmproj-Unlimited-OCR-2-F16.gguf`（825 MB）。
+下载固定到修订版本 `b2cda9bb25ad9dd5585194a528d66a8f2d068c54`，
+并通过 SHA256 验证。v2 不会复用缓存中的 v1 文件。
 
 ### 如何按操作系统安装
 
@@ -170,11 +175,11 @@ unlocr report.pdf --out ./out --quality best
 | `--from-list FILE` | *(无)* | 从文本文件中读取额外的 PDF 路径（每行一个；跳过 `#` 注释和空行）。 |
 | `--password PW` | `UNLOCR_PDF_PASSWORD` | 加密 PDF 的用户/打开密码。`--password` 会覆盖环境变量。建议使用 `UNLOCR_PDF_PASSWORD` 环境变量或 `--password-file`，以避免密码出现在 shell 历史记录和 unlocr 自身的 argv 中。（注意：poppler（pdfinfo/pdftoppm）仍会以 `-upw` 接收该密码，因此无论使用哪种来源，在这些子进程运行期间密码都会出现在进程列表中。） |
 | `--password-file FILE` | *(无)* | 候选 PDF 密码的文本文件（每行一个；跳过 `#` 注释和空行）。每个 PDF 会依次尝试每个密码直到解锁，因此可处理使用不同密码的批量文件。无法解锁的 PDF 会被跳过（并记录），批处理继续进行。 |
-| `--quality TIER` | `good` | 质量预设。选项：`best` (BF16), `good` (Q8_0), `less` (Q4_K_M)。 |
-| `--quant TAG` | *(来自质量)* | 精确的 Hugging Face 模型量化标签（例如 `Q6_K`, `IQ4_XS`）。会覆盖 `--quality`。 |
+| `--quality TIER` | `good` | 质量预设。选项：`best` (BF16), `good` (Q8_0), `less` (AD-Q4_K)。 |
+| `--quant TAG` | *(来自质量)* | 精确的 Hugging Face 模型量化标签（例如 `AD-Q6_K`, `AD-Q5_K`）。会覆盖 `--quality`。 |
 | `--model PATH` | *(HF 下载)* | 直接使用此 GGUF 文件，跳过 HF 下载和命名规范。这会禁用 `--quant`/`--quality`/`--model-dir` 的选择。 |
 | `--mmproj PATH` | *(缓存的投影器)* | 投影器 (mmproj) GGUF 覆盖。需要与 `--model` 配合使用。 |
-| `--max-tokens N` | `4096` | 每页生成的最大 token 数（防止密集页面上的无限循环/失控）。 |
+| `--max-tokens N` | `8000` | 每页生成的最大 token 数（防止密集页面上的无限循环/失控）。 |
 | `--pages RANGE` | *(所有)* | 要进行 OCR 的页面：单页 (`5`) 或包含两端的、基于 1 的范围 (`5-9`)。应用于每个输入。 |
 | `--task PRESET` | `markdown` | 提示词预设：`markdown`（干净的 md）、`grounding`（md + 布局坐标）、`free`（纯文本）、`figure`（解析图表/插图）。 |
 | `--prompt TEXT` | *(来自任务)* | 自定义 OCR 提示词。会覆盖 `--task`。使用 `<|grounding|>` 获取布局坐标。 |
@@ -186,7 +191,7 @@ unlocr report.pdf --out ./out --quality best
 | `--model-dir PATH` | *系统缓存* | 缓存 GGUF 模型下载的自定义目录。 |
 | `--port N` | `0` (自动) | 启动的 `llama-server` 所使用的端口。 |
 | `--keep-images` | `false` | 保留处理过程中生成的中间页面 PNG。 |
-| `--gpu` | `false` | 通过本地 vLLM 运行完整的 DeepSeek-OCR 模型。`--endpoint http://localhost:8000 --endpoint-model deepseek-ai/DeepSeek-OCR` 的快捷方式。 |
+| `--gpu` | `false` | 通过兼容的本地服务器运行完整的 Unlimited-OCR-2 模型。`--endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR-2` 的快捷方式。 |
 | `--endpoint URL` | *本地启动* | 将请求路由到远程的兼容 OpenAI 的服务器（vLLM、SGLang 等），并跳过本地启动。 |
 | `--endpoint-key KEY`| `UNLOCR_API_KEY` | `--endpoint` 的 Bearer API 令牌（或通过 `UNLOCR_API_KEY` 环境变量设置）。 |
 | `--endpoint-model M`| *(无)* | 发送到端点请求体中的模型名称（vLLM/LiteLLM 网关需要）。 |
@@ -196,7 +201,7 @@ unlocr report.pdf --out ./out --quality best
 ### 工作原理
 
 1.  **预检**：定位 `llama-server`（优先使用 unlocr 缓存的修补后 R-SWA 构建，如果不存在则自动下载）并定位 `pdftoppm`。如果使用了外部的 `llama-server` (`--llama-bin` 或位于 `PATH` 中)，则会显示一条警告，提示无法验证其是否支持 R-SWA（可通过设置 `UNLOCR_ALLOW_EXTERNAL_LLAMA=1` 消除该警告）。
-2.  **模型缓存**：检查缓存目录中是否存在 `Unlimited-OCR-<quant>.gguf` 和 `mmproj-Unlimited-OCR-F16.gguf`，如果缺失则从 HF 下载。
+2.  **模型缓存**：检查缓存目录中是否存在 `Unlimited-OCR-2-<quant>.gguf` 和 `mmproj-Unlimited-OCR-2-F16.gguf`，如果缺失则从 HF 上的 AtomicChat 下载。
 3.  **启动服务器**：启动一个后台 `llama-server` 实例，并轮询 `/health` 直至其处于活动状态。
 4.  **OCR 处理**：对于每个 PDF，运行 `pdftoppm` 将页面提取为 PNG 图像，依次将它们（进行 base64 编码）POST 发送至 `/v1/chat/completions`，并追加生成的 markdown 输出。
 
@@ -220,23 +225,18 @@ GGUF 文件会在本地进行缓存。它们的文件体积可能相当大（根
 
 ### 在 GPU 上运行完整模型 (vLLM)
 
-对于未量化模型的高性能 GPU 服务化部署：
-1.  安装 vLLM（推荐预发布版本以支持 DeepSeek-OCR）：
-    ```bash
-    pip install -U vllm --pre --extra-index-url https://wheels.vllm.ai/nightly
-    ```
-2.  部署服务：
-    ```bash
-    vllm serve deepseek-ai/DeepSeek-OCR \
-      --no-enable-prefix-caching \
-      --mm-processor-cache-gb 0 \
-      --logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
-    ```
-3.  运行 `unlocr` 并指向该端点：
-    ```bash
-    unlocr report.pdf --gpu
-    ```
-    *(在 GUI 中，选择 **GPU 完整模型 (vLLM · DeepSeek-OCR)** 引擎预设。)*
+请按照后端的 v2 配置说明，启动明确支持
+[`baidu/Unlimited-OCR-2`](https://huggingface.co/baidu/Unlimited-OCR-2)
+的 OpenAI 兼容后端，然后连接：
+
+```bash
+unlocr report.pdf --endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR-2
+# 等效快捷方式：
+unlocr report.pdf --gpu
+```
+
+在 GUI 中选择 **GPU 完整模型（vLLM · Unlimited-OCR-2）**。此预设仅配置连接，
+不会安装或启动远程后端。
 
 > [!TIP]
 > **Google Colab**：查看 Google Colab 笔记本，在免费的 Colab T4 云实例上运行完整的 GPU 流水线：

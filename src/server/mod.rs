@@ -149,6 +149,19 @@ pub(crate) fn apply_sampling(
     }
 }
 
+/// Unlimited-OCR-2 training format: page marker, image, then task instruction.
+/// Shared by streaming and non-streaming requests, including remote servers.
+fn ocr_messages(prompt: &str, data_uri: &str) -> serde_json::Value {
+    serde_json::json!([{
+        "role": "user",
+        "content": [
+            { "type": "text", "text": "<PAGE>" },
+            { "type": "image_url", "image_url": { "url": data_uri } },
+            { "type": "text", "text": prompt }
+        ]
+    }])
+}
+
 /// POST one image + prompt to an OpenAI-compatible `{base_url}/v1/chat/completions`
 /// and return the assistant text. Shared by the local `Server` and `RemoteEndpoint`;
 /// the only difference is the base URL and an optional bearer token.
@@ -171,13 +184,7 @@ pub(crate) fn ocr_via(
     let mut body = serde_json::json!({
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "messages": [{
-            "role": "user",
-            "content": [
-                { "type": "text", "text": prompt },
-                { "type": "image_url", "image_url": { "url": data_uri } }
-            ]
-        }]
+        "messages": ocr_messages(prompt, data_uri)
     });
     if let Some(m) = model {
         body["model"] = serde_json::Value::String(m.to_string());
@@ -264,13 +271,7 @@ pub(crate) fn ocr_via_stream(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": true,
-        "messages": [{
-            "role": "user",
-            "content": [
-                { "type": "text", "text": prompt },
-                { "type": "image_url", "image_url": { "url": data_uri } }
-            ]
-        }]
+        "messages": ocr_messages(prompt, data_uri)
     });
     if let Some(m) = model {
         body["model"] = serde_json::Value::String(m.to_string());

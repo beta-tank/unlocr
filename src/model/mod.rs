@@ -8,73 +8,40 @@ mod tests;
 
 pub use download::{ensure, ensure_with_overrides, ensure_with_progress};
 
-// Local llama.cpp path: the quantized GGUF build of Unlimited-OCR.
-pub(crate) const REPO: &str = "sahilchachra/Unlimited-OCR-GGUF";
-pub(crate) const MMPROJ: &str = "mmproj-Unlimited-OCR-F16.gguf";
+// Local llama.cpp path: AtomicChat's quantized GGUF build of Unlimited-OCR-2.
+pub(crate) const REPO: &str = "AtomicChat/Unlimited-OCR-2-GGUF";
+pub(crate) const MMPROJ: &str = "mmproj-Unlimited-OCR-2-F16.gguf";
 
 /// Pinned model revision (a commit sha, NOT the mutable `main` ref).
-pub(crate) const REV: &str = "028d04678db356095d0015b70f0803f2179180f4";
+pub(crate) const REV: &str = "b2cda9bb25ad9dd5585194a528d66a8f2d068c54";
 
 /// sha256 of each shipped GGUF at REV. Verified live against HF's file-metadata
 /// API (`/api/models/{REPO}/revision/{REV}?blobs=true`, each entry's `lfs.sha256`)
-/// at the exact pinned REV commit -- not fabricated. The 3 originally-pinned
-/// quants (BF16/Q8_0/Q4_K_M) were re-checked at the same call and are unchanged.
+/// at the exact pinned REV commit.
 pub(crate) const DIGESTS: &[(&str, &str)] = &[
     (
-        "Unlimited-OCR-BF16.gguf",
-        "731b7d1f56c94198607e08cec6f11ed62e6493b8539f9f4ed337ddd1ab3a1896",
+        "Unlimited-OCR-2-BF16.gguf",
+        "a286e69e43573db6fbc06557210f517dab745ac0c18330bab019c2ffea28a21b",
     ),
     (
-        "Unlimited-OCR-Q8_0.gguf",
-        "234c36f679a3768f5564e9e02c2c1deacbd5677b9c8558a57133f1813f6dd3b8",
+        "Unlimited-OCR-2-Q8_0.gguf",
+        "a643ec02822ce653c7aed99aa4279cc5b8cf3711be46221c460c16931b2cbfde",
     ),
     (
-        "Unlimited-OCR-Q6_K.gguf",
-        "a9994800e005190197a4cc5c0b54a88db5c6aba6f6dca48a27992ea2e1c0b3b3",
+        "Unlimited-OCR-2-AD-Q6_K.gguf",
+        "4adf52bcbc836aa42dc22dcf6076811ff130282600bcc25d68ad81b3a59259da",
     ),
     (
-        "Unlimited-OCR-Q5_K_M.gguf",
-        "3f3fc21627c8998cc5b9f682d913ad392f84f72d7037ab465f50a1c8c46d02c2",
+        "Unlimited-OCR-2-AD-Q5_K.gguf",
+        "84c4e29c71dfc66b34184bd1a550bc85e9d7e78a2ec265103411a446fe7d5ee3",
     ),
     (
-        "Unlimited-OCR-Q5_K_S.gguf",
-        "f4390be9a476917d4a9e05b1abde21dd16abb869fe9fd8a13fd279a26113ca61",
+        "Unlimited-OCR-2-AD-Q4_K.gguf",
+        "38765f1267120535de6f46bf2d0e6c27ebdbfc45fd83996643265f2b7a8f3538",
     ),
     (
-        "Unlimited-OCR-Q4_K_M.gguf",
-        "c8461bded976eac709a33f6b26e1414efcd2124a203f2ee93ee984a4c9e9265b",
-    ),
-    (
-        "Unlimited-OCR-Q4_K_S.gguf",
-        "0d16b0ed59d1dfb0ed3c304fc3cd00a18a0b8f6ce53756717be25e75e13691a7",
-    ),
-    (
-        "Unlimited-OCR-Q3_K_M.gguf",
-        "d90e4b8e6b9c9c6b1769d09958588df74a7e1393a0ee39b9fb54b9eca3e219fe",
-    ),
-    (
-        "Unlimited-OCR-IQ4_XS.gguf",
-        "758dcd1d17642961432a5978a672d52a8e59b52f7cbd65e7fbb34acd6b43e781",
-    ),
-    (
-        "Unlimited-OCR-IQ4_NL.gguf",
-        "c910c1a3b0469e323bd6402e764e815fbbdc98ce33ed79cd955efc5faae14ad2",
-    ),
-    (
-        "Unlimited-OCR-IQ3_M.gguf",
-        "869a3dff3dec40f9ae7f8d151089bf75e1c9615cfb7c022389891957344a89a0",
-    ),
-    (
-        "Unlimited-OCR-IQ3_XXS.gguf",
-        "4fd509dd1806355a0cec8a0e63d71edc888577f832d3aa7cd68eb9a70ceca0fd",
-    ),
-    (
-        "Unlimited-OCR-IQ2_M.gguf",
-        "fecb9e983f0fadbc11c6cce00611c05179dd7b6003abfad3956404778595d59e",
-    ),
-    (
-        "mmproj-Unlimited-OCR-F16.gguf",
-        "4f28c295e1fcf67a97488e356f2b4372da4702b77fdfad0fa138b5821325743c",
+        "mmproj-Unlimited-OCR-2-F16.gguf",
+        "6e00b887bc6171c5f16dba4b96d894e1b8f0fcf3fcaa978d89e30dd5ec3e017b",
     ),
 ];
 
@@ -89,73 +56,33 @@ pub struct QuantInfo {
     pub tier: Option<&'static str>,
 }
 
-/// All 13 published language-model quants for `REPO`, in the README's documented
-/// order (sizes/names verified against the same HF API call as `DIGESTS`).
+/// All five published language-model quants for `REPO` (sizes/names verified
+/// against the same HF API call as `DIGESTS`).
 pub const KNOWN_QUANTS: &[QuantInfo] = &[
     QuantInfo {
         name: "BF16",
-        size_bytes: 5_876_578_080,
+        size_bytes: 5_884_466_304,
         tier: Some("best"),
     },
     QuantInfo {
         name: "Q8_0",
-        size_bytes: 3_126_139_904,
+        size_bytes: 3_134_027_904,
         tier: Some("good"),
     },
     QuantInfo {
-        name: "Q6_K",
-        size_bytes: 2_613_275_904,
+        name: "AD-Q6_K",
+        size_bytes: 2_742_941_824,
         tier: None,
     },
     QuantInfo {
-        name: "Q5_K_M",
-        size_bytes: 2_219_208_704,
+        name: "AD-Q5_K",
+        size_bytes: 2_276_161_664,
         tier: None,
     },
     QuantInfo {
-        name: "Q5_K_S",
-        size_bytes: 2_098_952_704,
-        tier: None,
-    },
-    QuantInfo {
-        name: "Q4_K_M",
-        size_bytes: 1_950_326_784,
+        name: "AD-Q4_K",
+        size_bytes: 2_023_848_064,
         tier: Some("less"),
-    },
-    QuantInfo {
-        name: "Q4_K_S",
-        size_bytes: 1_805_289_984,
-        tier: None,
-    },
-    QuantInfo {
-        name: "Q3_K_M",
-        size_bytes: 1_553_635_584,
-        tier: None,
-    },
-    QuantInfo {
-        name: "IQ4_XS",
-        size_bytes: 1_640_897_024,
-        tier: None,
-    },
-    QuantInfo {
-        name: "IQ4_NL",
-        size_bytes: 1_701_901_824,
-        tier: None,
-    },
-    QuantInfo {
-        name: "IQ3_M",
-        size_bytes: 1_448_949_504,
-        tier: None,
-    },
-    QuantInfo {
-        name: "IQ3_XXS",
-        size_bytes: 1_335_367_424,
-        tier: None,
-    },
-    QuantInfo {
-        name: "IQ2_M",
-        size_bytes: 1_232_148_224,
-        tier: None,
     },
 ];
 
@@ -287,9 +214,9 @@ pub fn base_data_dir() -> Res<PathBuf> {
     }
 }
 
-/// GGUF filename for a quant tag, e.g. "Q8_0" -> "Unlimited-OCR-Q8_0.gguf".
+/// GGUF filename for a quant tag, e.g. "Q8_0" -> "Unlimited-OCR-2-Q8_0.gguf".
 pub(crate) fn model_filename(quant: &str) -> String {
-    format!("Unlimited-OCR-{quant}.gguf")
+    format!("Unlimited-OCR-2-{quant}.gguf")
 }
 
 /// Reject quant tags that could escape the cache dir or manipulate the download
@@ -320,9 +247,9 @@ pub fn check_presence(cache: &Path, quant: &str) -> Res<(PathBuf, bool, PathBuf,
     ))
 }
 
-/// Quant tags whose GGUF is already cached on disk, e.g. ["Q8_0", "Q4_K_M"].
+/// Quant tags whose v2 GGUF is already cached on disk, e.g. ["Q8_0", "AD-Q4_K"].
 pub fn list_cached_quants(cache: &Path) -> Vec<String> {
-    let prefix = "Unlimited-OCR-";
+    let prefix = "Unlimited-OCR-2-";
     let suffix = ".gguf";
     let mut quants: Vec<String> = match fs::read_dir(cache) {
         Ok(rd) => rd

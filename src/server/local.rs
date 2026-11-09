@@ -91,9 +91,8 @@ fn await_health(child: &mut Child, stderr_log: &tempfile::NamedTempFile, port: u
         if let Some(status) = child.try_wait()? {
             return Err(format!(
                 "llama-server exited ({status}) before becoming healthy. \
-                 Likely an old build without DeepSeek-OCR support, or an external build \
-                 without the Unlimited-OCR R-SWA patch (PR #24975) -- drop --llama-bin to \
-                 use unlocr's bundled build.\n--- llama-server stderr ---\n{}",
+                 Check the startup log for model/projector compatibility, unsupported \
+                 options, or insufficient memory.\n--- llama-server stderr ---\n{}",
                 read_stderr_log(stderr_log)
             )
             .into());
@@ -118,10 +117,11 @@ fn await_health(child: &mut Child, stderr_log: &tempfile::NamedTempFile, port: u
 }
 
 fn read_stderr_log(stderr_log: &tempfile::NamedTempFile) -> String {
-    let mut s = String::new();
+    let mut bytes = Vec::new();
     if let Ok(mut f) = stderr_log.reopen() {
-        let _ = f.read_to_string(&mut s);
+        let _ = f.read_to_end(&mut bytes);
     }
+    let s = String::from_utf8_lossy(&bytes);
     // keep the tail; startup logs can be long
     let tail: String = s
         .lines()
@@ -146,8 +146,8 @@ impl Server {
 
     /// Spawn llama-server. `image_max_tokens` (Some) adds `--image-max-tokens N`
     /// (DeepSeek-OCR detail knob); `chat_template` (Some) adds `--chat-template
-    /// <name>` (e.g. "deepseek-ocr"). Both are inert when None, so the default
-    /// command line is byte-for-byte what it was before these knobs existed.
+    /// <name>` (e.g. "deepseek-ocr"). Defaults use one sequence (required by
+    /// Unlimited-OCR-2), Jinja, and a bounded 32768-token context.
     pub fn start(
         bin: &Path,
         model: &Path,
@@ -174,7 +174,10 @@ impl Server {
 
             // Capture stderr to a temp file so we can show the real error if the
             // model fails to load (e.g. a llama.cpp build without DeepSeek-OCR).
-            let stderr_log = tempfile::NamedTempFile::new()?;
+            let stderr_log = tempfile::Builder::new()
+                .prefix("unlocr-llama-server-")
+                .suffix(".log")
+                .tempfile()?;
             let stderr_handle = stderr_log.reopen()?;
 
             let mut cmd = Command::new(bin);
@@ -196,6 +199,7 @@ impl Server {
                 }
             }
 
+            let launch_command = format!("{cmd:?}");
             let mut child = cmd
                 .stdout(Stdio::null())
                 .stderr(Stdio::from(stderr_handle))
@@ -227,7 +231,13 @@ impl Server {
                         || err_str.contains("already in use")
                         || err_str.contains("WSAEADDRINUSE");
 
-                    last_err = Some(e);
+                    // Keep the full startup log on failure: the GUI may only have
+                    // room for the tail, and the child console closes on Windows.
+                    let log_info = match stderr_log.keep() {
+                        Ok((_, path)) => format!("Full llama-server stderr log: {}", path.display()),
+                        Err(err) => format!("Could not preserve llama-server stderr log: {err}"),
+                    };
+                    last_err = Some(format!("{e}\nCommand: {launch_command}\n{log_info}").into());
 
                     if !is_bind_error {
                         break;
@@ -297,6 +307,14 @@ pub(crate) fn server_args(
         model.as_os_str().to_owned(),
         "--mmproj".into(),
         mmproj.as_os_str().to_owned(),
+        // The Unlimited-OCR-2 graph rejects n_seq_max > 1. Do not rely on
+        // llama-server's auto parallelism (b11913 selects four sequences).
+        "-np".into(),
+        "1".into(),
+        // Avoid allocating the model's potentially huge training context.
+        "-c".into(),
+        "32768".into(),
+        "--jinja".into(),
         "--host".into(),
         "127.0.0.1".into(),
         "--port".into(),

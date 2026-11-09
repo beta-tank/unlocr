@@ -6,9 +6,9 @@ fn ocroptions_default_matches_cli() {
     // Defaults must mirror the CLI flags so a no-op caller matches `unlocr`.
     let o = OcrOptions::default();
     assert_eq!(o.quant, "Q8_0");
-    assert_eq!(o.max_tokens, 4096);
+    assert_eq!(o.max_tokens, 8000);
     assert_eq!(o.dpi, 144);
-    assert_eq!(o.prompt, "document parsing.");
+    assert_eq!(o.prompt, "Multi page parsing.");
     assert_eq!(o.port, 0);
     assert!(o.model_dir.is_none());
     assert!(!o.keep_images);
@@ -696,7 +696,7 @@ fn ocr_pages_strips_layout_annotations() {
         (out, partials)
     };
 
-    // Default prompt ("document parsing.") -> stripped everywhere.
+    // Default prompt ("Multi page parsing.") -> stripped everywhere.
     let (out, partials) = run(&OcrOptions::default());
     assert_eq!(out.pages[0].1, cleaned, "final page text must be stripped");
     assert_eq!(

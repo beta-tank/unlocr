@@ -20,7 +20,7 @@ pub(crate) enum Backend {
 /// The currently loaded model plus a human label for the status badge.
 pub(crate) struct LoadedModel {
     pub(crate) backend: Backend,
-    /// "Unlimited-OCR Q8_0" for local, the base URL for remote.
+    /// "Unlimited-OCR-2 Q8_0" for local, the base URL for remote.
     pub(crate) label: String,
     /// "local" | "remote", echoed to the frontend for the badge.
     pub(crate) mode: String,
