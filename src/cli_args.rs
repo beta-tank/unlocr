@@ -270,8 +270,9 @@ impl Quality {
     }
 }
 
-/// Prompt presets the model understands. Maps to one of DeepSeek-OCR's task
-/// prompts; `--prompt` overrides the resolved string for full control.
+/// OCR 2's trained parsing instruction plus legacy DeepSeek-OCR task prompts.
+/// `--prompt` overrides the resolved string for full control. Non-grounding
+/// output is cleaned in the shared pipeline, not guaranteed tag-free by a prompt.
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
 pub enum Task {
     /// Clean structured markdown (headings, lists, tables), no coordinates. The default.

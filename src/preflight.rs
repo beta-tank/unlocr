@@ -144,9 +144,9 @@ pub fn run_doctor(
         Some((path, Provenance::External)) => {
             print!("  [OK] llama-server: found at {}", path.display());
             match build_number(&path) {
-                Some(b) => println!(
-                    " (build b{b}; external -- unverified for the Unlimited-OCR-2 patch)"
-                ),
+                Some(b) => {
+                    println!(" (build b{b}; external -- unverified for the Unlimited-OCR-2 patch)")
+                }
                 None => println!(
                     "\n       [WARN] external llama-server: could not parse the build version, \
                      and cannot verify the Unlimited-OCR-2 patch."

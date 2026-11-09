@@ -1,7 +1,7 @@
 use crate::inputs::{is_image, is_pdf, sniff_image_mime};
 use crate::model;
 use crate::options::{OcrOptions, OcrOutput, Progress};
-use crate::output::{push_page, strip_layout_annotations, AnnotationStripper};
+use crate::output::{clean_layout_annotations, push_page, AnnotationStripper};
 use crate::pdf;
 use crate::preflight;
 use crate::server;
@@ -229,6 +229,7 @@ where
     // task preset (CLI Task::Grounding, GUI TASK_PROMPTS.grounding) carries the
     // `<|grounding|>` marker, and a user who typed it explicitly wants raw boxes.
     let strip = !opts.prompt.contains("<|grounding|>");
+    let plain_text = opts.prompt.trim() == "Free OCR.";
 
     let mut md = String::new();
     // Capture each page's text separately so a caller can write per-page files
@@ -257,7 +258,7 @@ where
         // When stripping, chunks are line-buffered through the stripper (an
         // annotation prefix can be split across chunks), so the live transcript
         // advances per completed line; the cancel check still runs every chunk.
-        let mut stripper = AnnotationStripper::new();
+        let mut stripper = AnnotationStripper::with_plain_text(plain_text);
         // Accumulate the already-stripped output as it streams, rather than
         // re-running strip_layout_annotations over the raw text afterward: that
         // both avoids scanning every page twice and guarantees the stored text
@@ -319,7 +320,7 @@ where
                 // on_token was never called (default ImageOcr::ocr_image_stream
                 // fallback): nothing went through the stripper, so strip the raw
                 // text directly.
-                strip_layout_annotations(&result.text)
+                clean_layout_annotations(&result.text, plain_text)
             }
         } else {
             result.text

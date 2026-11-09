@@ -234,7 +234,9 @@ impl Server {
                     // Keep the full startup log on failure: the GUI may only have
                     // room for the tail, and the child console closes on Windows.
                     let log_info = match stderr_log.keep() {
-                        Ok((_, path)) => format!("Full llama-server stderr log: {}", path.display()),
+                        Ok((_, path)) => {
+                            format!("Full llama-server stderr log: {}", path.display())
+                        }
                         Err(err) => format!("Could not preserve llama-server stderr log: {err}"),
                     };
                     last_err = Some(format!("{e}\nCommand: {launch_command}\n{log_info}").into());

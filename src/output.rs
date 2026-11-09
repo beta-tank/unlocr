@@ -132,20 +132,24 @@ pub fn duplicate_stems(inputs: &[PathBuf]) -> Vec<String> {
     dups
 }
 
-/// Strip DeepSeek-OCR layout annotations from a whole page of model output.
+/// Strip Unlimited-OCR layout annotations from a whole page of model output.
 ///
 /// The Unlimited-OCR / DeepSeek-OCR family natively emits layout-grounded text:
 /// `<|det|>label [x1, y1, x2, y2]<|/det|>content` with 0-999-normalized
 /// coordinates, and upstream's Python `infer()` regex-cleans that to markdown.
-/// llama-server drops the special tokens and does no cleanup, so callers see
-/// `label [x, y, x, y]content` lines. This ports upstream's cleanup: it is the
+/// Backends may keep special tokens (including OCR 2's `<PAGE>`) or drop them,
+/// leaving `label [x, y, x, y]content` lines. This ports upstream's cleanup: it is the
 /// final-text sink; the streaming path uses `AnnotationStripper` (same per-line
 /// logic) because SSE chunks split annotations mid-prefix.
 pub fn strip_layout_annotations(text: &str) -> String {
+    clean_layout_annotations(text, false)
+}
+
+pub(crate) fn clean_layout_annotations(text: &str, plain_text: bool) -> String {
     let mut out = String::with_capacity(text.len());
     let mut first = true;
     for line in text.lines() {
-        if let Some(l) = strip_layout_line(line) {
+        if let Some(l) = clean_layout_line(line, plain_text) {
             if !first {
                 out.push('\n');
             }
@@ -163,21 +167,58 @@ pub fn strip_layout_annotations(text: &str) -> String {
 /// normally suppresses special tokens), then a line-start `label [n, n, n, n]`
 /// prefix is removed. `title` lines become `# ` headings (materially better
 /// markdown for one match arm); every other label keeps just its content.
-pub(crate) fn strip_layout_line(line: &str) -> Option<String> {
+fn clean_layout_line(line: &str, plain_text: bool) -> Option<String> {
+    // OCR 2 block headers are separate from their content. Discard even a
+    // truncated header (<BLOCK>te) rather than leaking metadata into the text.
+    // Several blocks may arrive on one line; preserve their boundaries.
+    if line.contains("<BLOCK>") {
+        let mut parts = line.split("<BLOCK>");
+        let mut out = Vec::new();
+        if let Some(prefix) = parts.next().and_then(|s| clean_layout_line(s, plain_text)) {
+            if !prefix.trim().is_empty() {
+                out.push(prefix);
+            }
+        }
+        for block in parts {
+            let Some((header, content)) = block.split_once("<FORK>") else {
+                continue;
+            };
+            let Some(content) = clean_layout_line(content, plain_text) else {
+                continue;
+            };
+            if header.trim_start().starts_with("title") && !plain_text && !content.is_empty() {
+                let level = (1..=6)
+                    .find(|n| header.contains(&format!("<LEVEL{n}>")))
+                    .unwrap_or(1);
+                out.push(format!("{} {}", "#".repeat(level), content.trim_start()));
+            } else if !content.is_empty() {
+                out.push(content);
+            }
+        }
+        return (!out.is_empty()).then(|| out.join("\n"));
+    }
+
+    let marker = line.contains("<PAGE>") || line.contains("<MERGE>");
     let mut line = Cow::Borrowed(line);
-    for tag in ["<|ref|>", "<|/ref|>", "<|det|>", "<|/det|>"] {
+    for tag in [
+        "<PAGE>", "<MERGE>", "<|ref|>", "<|/ref|>", "<|det|>", "<|/det|>",
+    ] {
         if line.contains(tag) {
             line = Cow::Owned(line.replace(tag, ""));
         }
     }
-    match split_layout_prefix(&line) {
+    if marker && line.trim().is_empty() {
+        return None;
+    }
+    match split_layout_prefix(line.trim_start()) {
         None => Some(line.into_owned()),
-        Some((label, rest)) => {
+        Some((label, rest, level)) => {
             let rest = rest.trim_start();
+            let rest = rest.strip_prefix("<FORK>").unwrap_or(rest).trim_start();
             if rest.is_empty() {
                 None
-            } else if label == "title" {
-                Some(format!("# {rest}"))
+            } else if label == "title" && !plain_text {
+                Some(format!("{} {rest}", "#".repeat(level)))
             } else {
                 Some(rest.to_string())
             }
@@ -185,14 +226,14 @@ pub(crate) fn strip_layout_line(line: &str) -> Option<String> {
     }
 }
 
-/// Split a line-start layout annotation into `(label, rest)`; `None` when the
+/// Split a line-start layout annotation into `(label, rest, heading_level)`; `None` when the
 /// line doesn't begin with one. Hand-rolled to avoid a regex dependency. The
 /// shape mirrors upstream's det_pattern: a label (`[A-Za-z_][A-Za-z0-9_-]*`,
-/// capped at 24 chars), optional spaces, then exactly four comma-separated
+/// capped at 24 chars), optional spaces, then a box or list of boxes containing four comma-separated
 /// unsigned integers. Each integer is capped at 3 digits (coordinates are
 /// 0-999 normalized upstream), which keeps prose like `see [1, 2]` or larger
 /// bracketed numbers out of the match.
-fn split_layout_prefix(line: &str) -> Option<(&str, &str)> {
+fn split_layout_prefix(line: &str) -> Option<(&str, &str, usize)> {
     let b = line.as_bytes();
     if b.is_empty() || !(b[0].is_ascii_alphabetic() || b[0] == b'_') {
         return None;
@@ -208,49 +249,101 @@ fn split_layout_prefix(line: &str) -> Option<(&str, &str)> {
     while i < b.len() && b[i] == b' ' {
         i += 1;
     }
+    // Some backends suppress <BLOCK> but retain LEVEL/FORK. Parse these as
+    // header syntax rather than deleting them globally from document content.
+    let mut level = 1;
+    for n in 1..=6 {
+        let tag = format!("<LEVEL{n}>");
+        if line[i..].starts_with(&tag) {
+            level = n;
+            i += tag.len();
+            while b.get(i) == Some(&b' ') {
+                i += 1;
+            }
+            break;
+        }
+    }
     if i >= b.len() || b[i] != b'[' {
         return None;
     }
     i += 1;
-    for k in 0..4 {
-        while i < b.len() && b[i] == b' ' {
-            i += 1;
-        }
-        let digits_start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        let n_digits = i - digits_start;
-        if n_digits == 0 || n_digits > 3 {
-            return None;
-        }
-        while i < b.len() && b[i] == b' ' {
-            i += 1;
-        }
-        if k < 3 {
-            if i >= b.len() || b[i] != b',' {
+    let nested = b.get(i) == Some(&b'[');
+    loop {
+        if nested {
+            if b.get(i) != Some(&b'[') {
                 return None;
             }
             i += 1;
         }
+        for k in 0..4 {
+            while i < b.len() && b[i] == b' ' {
+                i += 1;
+            }
+            let digits_start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            let n_digits = i - digits_start;
+            if n_digits == 0 || n_digits > 3 {
+                return None;
+            }
+            while i < b.len() && b[i] == b' ' {
+                i += 1;
+            }
+            if k < 3 {
+                if i >= b.len() || b[i] != b',' {
+                    return None;
+                }
+                i += 1;
+            }
+        }
+        if i >= b.len() || b[i] != b']' {
+            return None;
+        }
+        i += 1;
+        if !nested {
+            break;
+        }
+        while b.get(i) == Some(&b' ') {
+            i += 1;
+        }
+        match b.get(i) {
+            Some(b']') => {
+                i += 1;
+                break;
+            }
+            Some(b',') => {
+                i += 1;
+                while b.get(i) == Some(&b' ') {
+                    i += 1;
+                }
+            }
+            _ => return None,
+        }
     }
-    if i >= b.len() || b[i] != b']' {
-        return None;
-    }
-    Some((&line[..label_end], &line[i + 1..]))
+    Some((&line[..label_end], &line[i..], level))
 }
 
-/// Line-buffering wrapper around `strip_layout_line` for the streaming path.
+/// Line-buffering wrapper around `clean_layout_line` for the streaming path.
 /// SSE chunks split annotations mid-prefix (`"tit"`, `"le [168,"`), so chunks
 /// are buffered until a newline completes each line. The tradeoff is that the
 /// live transcript updates per line (one layout block) instead of per token.
 pub(crate) struct AnnotationStripper {
     buf: String,
+    plain_text: bool,
 }
 
 impl AnnotationStripper {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
-        AnnotationStripper { buf: String::new() }
+        Self::with_plain_text(false)
+    }
+
+    pub(crate) fn with_plain_text(plain_text: bool) -> Self {
+        AnnotationStripper {
+            buf: String::new(),
+            plain_text,
+        }
     }
 
     /// Feed one streamed chunk; returns the stripped complete lines that became
@@ -263,7 +356,7 @@ impl AnnotationStripper {
         let complete: String = self.buf.drain(..=last_nl).collect();
         let mut out = String::new();
         for line in complete.lines() {
-            if let Some(l) = strip_layout_line(line) {
+            if let Some(l) = clean_layout_line(line, self.plain_text) {
                 out.push_str(&l);
                 out.push('\n');
             }
@@ -277,7 +370,7 @@ impl AnnotationStripper {
         if rest.is_empty() {
             return String::new();
         }
-        strip_layout_line(&rest).unwrap_or_default()
+        clean_layout_line(&rest, self.plain_text).unwrap_or_default()
     }
 }
 

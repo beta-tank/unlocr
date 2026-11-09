@@ -107,6 +107,107 @@ fn annotation_stripper_buffers_fragmented_chunks() {
     assert_eq!(s.finish(), "");
 }
 
+/// OCR 2 returns page markers even for single images. A marker before a layout
+/// header must not prevent cleanup; the stream can split either kind of token.
+#[test]
+fn ocr2_page_markers_and_box_lists_are_cleaned_in_stream_and_final_text() {
+    let raw = "<PAGE>  <|det|>text [1, 2, 3, 4]<|/det|>Привет\n\
+               <PAGE>\n\
+               <|ref|>title<|/ref|><|det|>[[10, 20, 30, 40]]<|/det|>Heading\n\
+               <|ref|>text<|/ref|><|det|>[[1, 2, 3, 4], [5, 6, 7, 8]]<|/det|>Body\n\
+               <|det|>image [1, 2, 3, 4]<|/det|>";
+    let expected = "Привет\n# Heading\nBody";
+    assert_eq!(strip_layout_annotations(raw), expected);
+
+    let mut stripper = AnnotationStripper::new();
+    let mut streamed = String::new();
+    // Character-sized chunks include token boundaries and non-ASCII content.
+    for ch in raw.chars() {
+        streamed.push_str(&stripper.push(&ch.to_string()));
+    }
+    streamed.push_str(&stripper.finish());
+    assert_eq!(streamed.trim_end(), expected);
+
+    for malformed in [
+        "text [[1, 2, 3, 4]unfinished",
+        "text [[1, 2, 3, 4], [5, 6]]Body",
+        "text [[1, 2, 3, 4000]]Body",
+    ] {
+        assert_eq!(strip_layout_annotations(malformed), malformed);
+    }
+}
+
+#[test]
+fn ocr2_block_format_cleans_user_report_in_both_output_modes() {
+    let raw = "<BLOCK>title<LEVEL1>[86, 6, 173, 24]<FORK>1.序\n\
+               <BLOCK>text[75, 31, 974, 99]<FORK>『DARK SOULS』シリーズにおいて、人間とはなんでしょう。\n\
+               <MERGE>\n\
+               <BLOCK>text[86, 126, 971, 195]<FORK>…かつて火のはじまり、\n\
+               火の後を待った……\n\
+               <BLOCK>title[31, 498, 315, 519]<FORK>2-A. 火の種類\n\
+               <BLOCK>title<LEVEL2>[31, 498, 315, 519]<FORK>Subsection\n\
+               <BLOCK>te";
+    let markdown = "# 1.序\n『DARK SOULS』シリーズにおいて、人間とはなんでしょう。\n…かつて火のはじまり、\n火の後を待った……\n# 2-A. 火の種類\n## Subsection";
+    let plain = "1.序\n『DARK SOULS』シリーズにおいて、人間とはなんでしょう。\n…かつて火のはじまり、\n火の後を待った……\n2-A. 火の種類\nSubsection";
+    for (plain_text, expected) in [(false, markdown), (true, plain)] {
+        assert_eq!(
+            crate::output::clean_layout_annotations(raw, plain_text),
+            expected
+        );
+        let mut stripper = AnnotationStripper::with_plain_text(plain_text);
+        let mut streamed = String::new();
+        for ch in raw.chars() {
+            streamed.push_str(&stripper.push(&ch.to_string()));
+        }
+        streamed.push_str(&stripper.finish());
+        assert_eq!(streamed.trim_end(), expected);
+    }
+    assert_eq!(
+        strip_layout_annotations("<BLOCK>text[1,2,3,4]<FORK>A<BLOCK>text[1,2,3,4]<FORK>B"),
+        "A\nB"
+    );
+    assert_eq!(
+        strip_layout_annotations("<table><tr><td>text</td></tr></table>"),
+        "<table><tr><td>text</td></tr></table>"
+    );
+}
+
+#[test]
+fn ocr2_headers_without_block_marker_are_cleaned() {
+    let raw = "6.そもそもはじまりの火が点いた要因は不明（ビッグバン？灰に由来?）\n\
+               title<LEVEL1>[83, 7, 175, 25]<FORK>1.序\n\
+               4.はじまいの火が陰と差异化\n\
+               (ビッグバン？7)なにち、気化した出来？\n\
+               title<LEVEL2>[113, 24, 175, 42]<FORK>1序\n\
+               『DARK SOUL』シーガニによって、人間はなんてしょう。";
+    let markdown = raw
+        .replace("title<LEVEL1>[83, 7, 175, 25]<FORK>", "# ")
+        .replace("title<LEVEL2>[113, 24, 175, 42]<FORK>", "## ");
+    let plain = markdown.replace("# 1.序", "1.序").replace("## 1序", "1序");
+    for (plain_text, expected) in [(false, markdown), (true, plain)] {
+        assert_eq!(
+            crate::output::clean_layout_annotations(raw, plain_text),
+            expected
+        );
+        let mut stripper = AnnotationStripper::with_plain_text(plain_text);
+        let mut streamed = String::new();
+        for ch in raw.chars() {
+            streamed.push_str(&stripper.push(&ch.to_string()));
+        }
+        streamed.push_str(&stripper.finish());
+        assert_eq!(streamed, expected);
+    }
+    assert_eq!(strip_layout_annotations("text[1,2,3,4]<FORK>Body"), "Body");
+    assert_eq!(
+        strip_layout_annotations("title<LEVEL6>[1,2,3,4]<FORK>Deep"),
+        "###### Deep"
+    );
+    assert_eq!(
+        strip_layout_annotations("Use <LEVEL2> and <FORK> literally"),
+        "Use <LEVEL2> and <FORK> literally"
+    );
+}
+
 #[test]
 fn resolve_output_path_cases() {
     let dir = Path::new("/out");
@@ -656,25 +757,16 @@ fn ocr_pages_aborts_when_cancelled() {
 /// (the user explicitly asked for boxes).
 #[test]
 fn ocr_pages_strips_layout_annotations() {
-    if std::process::Command::new("pdftoppm")
-        .arg("-v")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_err()
-    {
-        eprintln!("skipping ocr_pages_strips_layout_annotations: pdftoppm not on PATH");
-        return;
-    }
-
-    let raw = "title [168, 152, 838, 212]CLAUDE CODE\n\
-               image [138, 346, 868, 835]\n\
-               footer [387, 875, 612, 893]Written by Claude Code";
+    let raw = "<PAGE><BLOCK>title<LEVEL1>[168, 152, 838, 212]<FORK>CLAUDE CODE\n\
+               <MERGE>\n\
+               <BLOCK>footer[387, 875, 612, 893]<FORK>Written by Claude Code";
     let cleaned = "# CLAUDE CODE\nWritten by Claude Code";
 
-    let pdf_dir = tempfile::tempdir().expect("tmp pdf dir");
-    let pdf_path = pdf_dir.path().join("fixture.pdf");
-    std::fs::write(&pdf_path, two_page_pdf_bytes()).expect("write fixture pdf");
+    // The HTTP stub only needs an image signature. This tests the shared output
+    // pipeline without requiring Poppler or real model weights.
+    let img_dir = tempfile::tempdir().expect("tmp img dir");
+    let img_path = img_dir.path().join("scan.png");
+    std::fs::write(&img_path, b"\x89PNG\r\n\x1a\n").expect("write image signature");
 
     let run = |opts: &OcrOptions| -> (OcrOutput, String) {
         let stub_port = spawn_stub_ocr_server_with(raw);
@@ -682,8 +774,8 @@ fn ocr_pages_strips_layout_annotations() {
         let mut partials = String::new();
         let out = ocr_pages(
             &srv,
-            std::path::Path::new("pdftoppm"),
-            &pdf_path,
+            std::path::Path::new("/nonexistent/pdftoppm"),
+            &img_path,
             opts,
             &mut |p: Progress| {
                 if let Progress::PartialText { page: 1, chunk } = p {
@@ -709,6 +801,15 @@ fn ocr_pages_strips_layout_annotations() {
         "combined markdown must be stripped: {:?}",
         out.combined
     );
+
+    let free = OcrOptions {
+        prompt: "Free OCR.".to_string(),
+        ..OcrOptions::default()
+    };
+    let (out, partials) = run(&free);
+    assert_eq!(out.pages[0].1, "CLAUDE CODE\nWritten by Claude Code");
+    assert_eq!(partials.trim_end(), "CLAUDE CODE\nWritten by Claude Code");
+    assert!(!out.combined.contains("<PAGE>"));
 
     // Grounding prompt -> raw boxes preserved (stream and final text).
     let grounding = OcrOptions {

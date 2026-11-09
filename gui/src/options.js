@@ -6,8 +6,10 @@
 // Task preset -> the user prompt actually sent. Unlimited-OCR uses NO system prompt;
 // the backend wraps the image as `<PAGE>` + image + this task instruction.
 // `<|grounding|>` lives only on the grounding
-// preset (markdown + layout coordinates); the default `markdown` preset emits clean
-// markdown with no boxes. The Prompt box overrides this when non-empty. Keep in sync
+// preset (markdown + layout coordinates); other presets use backend cleanup of
+// page/layout markers, since OCR 2 can emit them regardless of the instruction.
+// `Free OCR.` is a legacy task instruction, not a documented OCR 2 no-tags guarantee.
+// The Prompt box overrides this when non-empty. Keep in sync
 // with the CLI's Task::prompt() (src/cli_args.rs).
 export const TASK_PROMPTS = {
   markdown: "Multi page parsing.",

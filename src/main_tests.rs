@@ -133,13 +133,19 @@ fn gpu_flag_fills_remote_defaults() {
     let mut args = Args::parse_from(["unlocr", "x.pdf", "--gpu"]);
     args.apply_gpu_defaults();
     assert_eq!(args.endpoint.as_deref(), Some("http://localhost:8000"));
-    assert_eq!(args.endpoint_model.as_deref(), Some("baidu/Unlimited-OCR-2"));
+    assert_eq!(
+        args.endpoint_model.as_deref(),
+        Some("baidu/Unlimited-OCR-2")
+    );
 
     // An explicit --endpoint wins; --gpu only fills the model default.
     let mut args = Args::parse_from(["unlocr", "x.pdf", "--gpu", "--endpoint", "http://host:9000"]);
     args.apply_gpu_defaults();
     assert_eq!(args.endpoint.as_deref(), Some("http://host:9000"));
-    assert_eq!(args.endpoint_model.as_deref(), Some("baidu/Unlimited-OCR-2"));
+    assert_eq!(
+        args.endpoint_model.as_deref(),
+        Some("baidu/Unlimited-OCR-2")
+    );
 
     // No --gpu = no remote defaults injected (stays local GGUF path).
     let mut args = Args::parse_from(["unlocr", "x.pdf"]);
