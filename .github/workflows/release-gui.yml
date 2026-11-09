@@ -1,6 +1,6 @@
 name: release-gui
 
-# Tag-driven GUI release. Builds the Tauri desktop bundles (dmg / msi / appimage /
+# Tag-driven or manually dispatched GUI release. Builds desktop bundles (dmg / msi / appimage /
 # deb) on each OS and attaches them to the SAME GitHub Release as the CLI binaries
 # (release.yml). Frontend is static (gui/src), so there is no npm build step.
 #
@@ -10,6 +10,18 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build (manual runs publish a test prerelease)
+        type: choice
+        required: true
+        default: windows
+        options:
+          - windows
+          - linux
+          - macos
+          - all
 
 permissions:
   contents: write
@@ -21,17 +33,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-14          # Apple silicon
-            target: aarch64-apple-darwin
-            args: --target aarch64-apple-darwin
-          - os: macos-15-intel    # Intel
-            target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin
-          - os: ubuntu-latest      # appimage + deb
-            args: ''
-          - os: windows-latest     # msi + nsis
-            args: ''
+        include: >-
+          ${{ fromJSON('{
+            "windows": [{"os": "windows-latest", "args": ""}],
+            "linux": [{"os": "ubuntu-latest", "args": ""}],
+            "macos": [
+              {"os": "macos-14", "target": "aarch64-apple-darwin", "args": "--target aarch64-apple-darwin"},
+              {"os": "macos-15-intel", "target": "x86_64-apple-darwin", "args": "--target x86_64-apple-darwin"}
+            ],
+            "all": [
+              {"os": "macos-14", "target": "aarch64-apple-darwin", "args": "--target aarch64-apple-darwin"},
+              {"os": "macos-15-intel", "target": "x86_64-apple-darwin", "args": "--target x86_64-apple-darwin"},
+              {"os": "ubuntu-latest", "args": ""},
+              {"os": "windows-latest", "args": ""}
+            ]
+          }')[inputs.platform || 'all'] }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -61,8 +77,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: gui/src-tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: unlocr ${{ github.ref_name }}
+          # A separate tag per manual run/attempt keeps test assets immutable.
+          # The test prefix also avoids triggering the v* production workflows.
+          tagName: ${{ github.event_name == 'workflow_dispatch' && format('test-gui-{0}-{1}', github.run_id, github.run_attempt) || github.ref_name }}
+          releaseName: ${{ github.event_name == 'workflow_dispatch' && format('unlocr test build {0} ({1}, attempt {2})', github.run_number, inputs.platform, github.run_attempt) || format('unlocr {0}', github.ref_name) }}
+          releaseCommitish: ${{ github.sha }}
           releaseDraft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' || contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
