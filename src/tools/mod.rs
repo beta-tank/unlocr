@@ -7,8 +7,8 @@
 //!
 //! Two sources: OFFICIAL upstream releases (pandoc, poppler/pdftoppm on Windows) that
 //! we only reference by URL + sha256 (no redistribution, no GPL-bundling obligation);
-//! and unlocr's OWN patched `llama-server` (Unlimited-OCR R-SWA, llama.cpp PR #24975,
-//! unmerged upstream) hosted on a dedicated `llama-rswa-<date>` release, pinned on
+//! and unlocr's patched `llama-server` (Unlimited-OCR-2, llama.cpp b11913 +
+//! `llama/unlimited-ocr2.patch`) hosted on a dedicated `llama-ocr2-b11913-<date>` release, pinned on
 //! every platform that has one (mac arm64/x64, linux x64, win x64).
 
 use crate::{Progress, Res};
@@ -36,8 +36,8 @@ struct ToolPin {
 // (+ DLLs) inside. macOS (per-arch): pandoc + llama-server; poppler has no standalone
 // macOS binary, left to Homebrew. Linux x86_64: llama-server only (poppler stays a
 // deb/rpm/apt/dnf dep). Other targets: nothing auto-downloads. The llama-server pins
-// point at unlocr's own `llama-rswa-<date>` release (see the module doc + the PIN-bump
-// checklist in CLAUDE.md); the rest are official upstream releases.
+// point at beta-tank/unlocr's `llama-ocr2-b11913-<date>` release (built by
+// build-llama-ocr2.yml); the rest are official upstream releases.
 
 #[cfg(not(test))]
 #[cfg(target_os = "windows")]
@@ -55,13 +55,12 @@ const PINS: &[ToolPin] = &[
         exe: "pdftoppm.exe",
     },
     ToolPin {
-        // unlocr's OWN patched CPU build (Unlimited-OCR R-SWA, llama.cpp PR #24975),
-        // hosted on a dedicated `llama-rswa-<date>` release. Stock upstream builds
-        // lack R-SWA (the PR is unmerged), so we can't point at ggml-org here. GPU
+        // Patched CPU build (Unlimited-OCR-2, llama.cpp b11913).
+        // Stock upstream builds lack the in-repo Unlimited-OCR-2 patch. GPU
         // variants (CUDA/Vulkan/HIP) are a per-driver matrix left to manual install.
         name: "llama-server",
-        url: "https://github.com/whit3rabbit/unlocr/releases/download/llama-rswa-20260704/llama-rswa-20260704-win-x64.zip",
-        sha256: "0d63ee83ace72fe7a660cdeca1adbd07f18bc194d617af0d689929806585a8ae",
+        url: "https://github.com/beta-tank/unlocr/releases/download/llama-ocr2-b11913-20261109/llama-ocr2-b11913-20261109-win-x64.zip",
+        sha256: "c66251d4ae7955a77391af17dad1c6836708a621b348423b01f14399e7a61791",
         exe: "llama-server.exe",
     },
 ];
@@ -75,11 +74,12 @@ const PINS: &[ToolPin] = &[
         sha256: "d9cad01d96ae774a0dc8c8c45bb1ad3e4c5ff2cc2e24f45958f5f9b7974aee34",
         exe: "pandoc",
     },
-    // unlocr's patched Metal build (Unlimited-OCR R-SWA, PR #24975), .zip-repackaged.
+    // Patched Metal build (Unlimited-OCR-2, llama.cpp b11913).
     ToolPin {
         name: "llama-server",
-        url: "https://github.com/whit3rabbit/unlocr/releases/download/llama-rswa-20260704/llama-rswa-20260704-macos-arm64.zip",
-        sha256: "f0deb0fcde61078a637086d23111699950654c2de790381cc041b8a382701a72",
+        url: "https://github.com/beta-tank/unlocr/releases/download/llama-ocr2-b11913-20261109/llama-ocr2-b11913-20261109-macos-arm64.zip",
+        // TODO(ocr2-arm64): asset not yet published; replace with its release SHA256.
+        sha256: "0000000000000000000000000000000000000000000000000000000000000000",
         exe: "llama-server",
     },
 ];
@@ -93,23 +93,23 @@ const PINS: &[ToolPin] = &[
         sha256: "6334f4d9af7c9e37e761dfad56fa5507685f6d29724ebf31c4be6d5c654a3161",
         exe: "pandoc",
     },
-    // unlocr's patched CPU build (Unlimited-OCR R-SWA, PR #24975), .zip-repackaged.
+    // Patched CPU build (Unlimited-OCR-2, llama.cpp b11913).
     ToolPin {
         name: "llama-server",
-        url: "https://github.com/whit3rabbit/unlocr/releases/download/llama-rswa-20260704/llama-rswa-20260704-macos-x64.zip",
-        sha256: "c8997ccbdfbb84967d5aeb1a14ca9c818beb075ccc3a193337455652c236ed82",
+        url: "https://github.com/beta-tank/unlocr/releases/download/llama-ocr2-b11913-20261109/llama-ocr2-b11913-20261109-macos-x64.zip",
+        sha256: "215afab3c0aadcb35fdb523095f2769b7e9a1408b7148e8cfce2663d248035e2",
         exe: "llama-server",
     },
 ];
 
 // Linux x86_64: only llama-server is auto-downloaded (unlocr's patched CPU build,
-// Unlimited-OCR R-SWA, PR #24975). poppler stays a deb/rpm/apt/dnf dep.
+// Unlimited-OCR-2, llama.cpp b11913). poppler stays a deb/rpm/apt/dnf dep.
 #[cfg(not(test))]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const PINS: &[ToolPin] = &[ToolPin {
     name: "llama-server",
-    url: "https://github.com/whit3rabbit/unlocr/releases/download/llama-rswa-20260704/llama-rswa-20260704-linux-x64.zip",
-    sha256: "cfbfe7678162714bab126ecb8c1478fc016d4d8b25ee8ea85ecf79b88fc4f230",
+    url: "https://github.com/beta-tank/unlocr/releases/download/llama-ocr2-b11913-20261109/llama-ocr2-b11913-20261109-linux-x64.zip",
+    sha256: "8c8386785f04effdec71bdb9c096104e7253a2204dfb6037681125557c3a93bf",
     exe: "llama-server",
 }];
 
