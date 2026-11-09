@@ -17,6 +17,34 @@ import { requireTauri } from "./tauri.js";
 // those functions, calling the handle as a function and crashing.
 const tr = (window.unlocrI18n && window.unlocrI18n.t) || ((k) => k);
 
+// Frontend-only preference, like language and UI zoom. Read synchronously so
+// disabled toasts never flash while the backend settings are loading.
+const TOASTS_KEY = "unlocr.toastsEnabled";
+let toastsEnabled = true;
+try {
+  toastsEnabled = localStorage.getItem(TOASTS_KEY) !== "false";
+} catch (err) {
+  /* storage unavailable: keep the default */
+}
+const dismissedToasts = new Set();
+
+function wireToastSettings() {
+  const toggle = document.getElementById("setToastsEnabled");
+  if (!toggle) return;
+  toggle.checked = toastsEnabled;
+  toggle.addEventListener("change", () => {
+    toastsEnabled = toggle.checked;
+    try {
+      localStorage.setItem(TOASTS_KEY, String(toastsEnabled));
+    } catch (err) {
+      /* storage unavailable: still apply for this session */
+    }
+    if (!toastsEnabled) {
+      document.getElementById("toastStack")?.replaceChildren();
+    }
+  });
+}
+
 /** Compact human byte size, e.g. 1503238553 -> "1.4 GB". */
 export function fmtBytes(n) {
   if (n < 0) {
@@ -47,12 +75,27 @@ function relTime(secs) {
  *  download progress). opts: {title, kind, meta, fill}. fill is 0..100 to show a
  *  progress bar, omitted for a plain notice. */
 export function showToast(id, opts) {
+  if (!toastsEnabled || dismissedToasts.has(id)) return null;
   const stack = document.getElementById("toastStack");
   if (!stack) return null;
   let el = stack.querySelector('[data-toast="' + id + '"]');
   if (!el) {
     el = document.createElement("div");
     el.dataset.toast = id;
+    el.tabIndex = 0;
+    el.setAttribute("role", "button");
+    // Keep any caller-provided onclick action (e.g. reopen OCR progress).
+    // Remember dismissal so live progress updates cannot recreate the toast.
+    el.addEventListener("click", () => {
+      dismissedToasts.add(id);
+      el.remove();
+    });
+    el.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        el.click();
+      }
+    });
     el.innerHTML =
       '<div class="toast__title"></div>' +
       '<div class="toast__meta"></div>' +
@@ -78,6 +121,9 @@ export function showToast(id, opts) {
 /** Remove a toast by id, optionally after `delay` ms (lets a completed toast
  *  linger briefly before fading out). */
 export function removeToast(id, delay) {
+  // An explicit removal marks the end of this notice's lifecycle; allow a
+  // later operation to reuse its id even if the user dismissed it earlier.
+  dismissedToasts.delete(id);
   const stack = document.getElementById("toastStack");
   if (!stack) return;
   const el = stack.querySelector('[data-toast="' + id + '"]');
@@ -222,6 +268,9 @@ function wireDownloadToasts(t) {
   t.event.listen("ocr://server-ready", () => {
     // All files present and the server is up. Clear any lingering download toasts
     // and, if a download actually ran this load, record one completion notice.
+    for (const id of dismissedToasts) {
+      if (id.startsWith("dl:")) dismissedToasts.delete(id);
+    }
     const stack = document.getElementById("toastStack");
     if (stack) {
       stack
@@ -238,6 +287,7 @@ function wireDownloadToasts(t) {
 /** Wire the bell (toggle panel, mark-read on open, click-outside close), the
  *  Clear-all button, and the download toasts. Silent outside the webview. */
 export function initNotifications() {
+  wireToastSettings();
   let t;
   try {
     t = requireTauri();

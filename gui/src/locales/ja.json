@@ -299,6 +299,8 @@
   "settings.saveError": "設定の保存エラー: {error}",
   "settings.saved": "保存しました。",
   "settings.serverConnection": "サーバー接続(詳細)",
+  "settings.showToasts": "ポップアップ通知を表示（すぐに適用）",
+  "settings.toastNotifications": "ポップアップ通知",
   "settings.unavailable": "利用不可: {error}",
   "status.done": "完了",
   "status.error": "エラー",

@@ -299,6 +299,8 @@
   "settings.saveError": "설정 저장 오류: {error}",
   "settings.saved": "저장됨.",
   "settings.serverConnection": "서버 연결(고급)",
+  "settings.showToasts": "팝업 알림 표시 (즉시 적용)",
+  "settings.toastNotifications": "팝업 알림",
   "settings.unavailable": "사용할 수 없음: {error}",
   "status.done": "완료",
   "status.error": "오류",

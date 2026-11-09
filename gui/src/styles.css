@@ -1926,6 +1926,7 @@ button {
 }
 .toast {
   pointer-events: auto;
+  cursor: pointer;
   padding: 11px 12px;
   border: 1px solid var(--glass-bd);
   border-left: 2px solid var(--violet);
@@ -1935,6 +1936,10 @@ button {
   -webkit-backdrop-filter: blur(20px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   animation: toast-in 0.15s ease-out;
+}
+.toast:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
 }
 .toast--done {
   border-left-color: var(--green);

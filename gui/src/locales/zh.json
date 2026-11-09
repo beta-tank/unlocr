@@ -299,6 +299,8 @@
   "settings.saveError": "保存设置出错：{error}",
   "settings.saved": "已保存。",
   "settings.serverConnection": "服务器连接（高级）",
+  "settings.showToasts": "显示弹出通知（立即生效）",
+  "settings.toastNotifications": "弹出通知",
   "settings.unavailable": "不可用：{error}",
   "status.done": "完成",
   "status.error": "错误",
