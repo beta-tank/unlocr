@@ -299,6 +299,8 @@
   "settings.saveError": "Error saving settings: {error}",
   "settings.saved": "Saved.",
   "settings.serverConnection": "Server connection (advanced)",
+  "settings.showToasts": "Show popup notifications (applies immediately)",
+  "settings.toastNotifications": "Toast notifications",
   "settings.unavailable": "unavailable: {error}",
   "status.done": "Done",
   "status.error": "Error",
