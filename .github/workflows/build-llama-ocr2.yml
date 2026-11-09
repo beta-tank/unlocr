@@ -1,0 +1,153 @@
+name: build-llama-ocr2
+
+# Unlimited-OCR-2: official llama.cpp b11913 + the in-repo patch.
+# Publish separately from the v1 R-SWA builds. Always use a new release tag for
+# a rebuild: the downloader verifies immutable ZIP assets by SHA256.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'New release tag for these builds (e.g. llama-ocr2-b11913-20261109)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  LLAMA_COMMIT: 7aca0d2ea8d92b56911233b822db01f9fbb1ae50 # b11913
+  RELEASE_TAG: ${{ inputs.release_tag }}
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            asset: macos-arm64
+            cmake_flags: '-DGGML_METAL_EMBED_LIBRARY=ON'
+          - os: macos-15-intel
+            asset: macos-x64
+            cmake_flags: '-DGGML_METAL=OFF'
+          - os: ubuntu-latest
+            asset: linux-x64
+            cmake_flags: ''
+          - os: windows-latest
+            asset: win-x64
+            cmake_flags: ''
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^llama-ocr2-b11913-[A-Za-z0-9._-]+$ ]] || {
+            echo 'release_tag must start with llama-ocr2-b11913- and contain only letters, digits, dots, underscores or hyphens'
+            exit 1
+          }
+
+      - name: Clone official llama.cpp b11913 and apply Unlimited-OCR-2 patch
+        shell: bash
+        run: |
+          git clone --depth 1 --branch b11913 https://github.com/ggml-org/llama.cpp.git llama.cpp
+          test "$(git -C llama.cpp rev-parse HEAD)" = "$LLAMA_COMMIT"
+          git -C llama.cpp apply --check ../llama/unlimited-ocr2.patch
+          git -C llama.cpp apply ../llama/unlimited-ocr2.patch
+          echo "Base llama.cpp: b11913 ($LLAMA_COMMIT)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Patch from unlocr commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          git hash-object llama/unlimited-ocr2.patch >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Add swap (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo fallocate -l 10G /mnt/swapfile || \
+            sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=10240
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      # tools/ defines the server target, so LLAMA_BUILD_TOOLS must stay ON.
+      # Only the llama-server target and its dependencies are compiled below.
+      # Static libraries + embedded Metal shaders keep the ZIP self-contained.
+      # OpenSSL is deliberately disabled; GGML_NATIVE=OFF keeps CPUs portable.
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S llama.cpp -B llama.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_BUILD_NUMBER=11913 \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_APP=OFF \
+            -DLLAMA_BUILD_UI=OFF \
+            -DLLAMA_USE_PREBUILT_UI=OFF \
+            -DLLAMA_OPENSSL=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            ${{ matrix.cmake_flags }}
+
+      - name: Build llama-server
+        shell: bash
+        run: cmake --build llama.cpp/build --config Release --target llama-server -j
+
+      - name: Smoke test and package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name="${RELEASE_TAG}-${{ matrix.asset }}"
+          bin=llama.cpp/build/bin/llama-server
+          "$bin" --version
+          zip -j "${name}.zip" "$bin"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "${name}.zip" > "${name}.zip.sha256"
+          else
+            shasum -a 256 "${name}.zip" > "${name}.zip.sha256"
+          fi
+          cat "${name}.zip.sha256" >> "$GITHUB_STEP_SUMMARY"
+          echo "ASSET=${name}.zip" >> "$GITHUB_ENV"
+          echo "CHECKSUM=${name}.zip.sha256" >> "$GITHUB_ENV"
+
+      - name: Smoke test and package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "$env:RELEASE_TAG-${{ matrix.asset }}"
+          $bin = 'llama.cpp/build/bin/Release/llama-server.exe'
+          & $bin --version
+          if ($LASTEXITCODE -ne 0) { throw "llama-server --version failed: $LASTEXITCODE" }
+          Compress-Archive -Path $bin -DestinationPath "$name.zip"
+          $hash = (Get-FileHash -Path "$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Out-File -FilePath "$name.zip.sha256" -Encoding ascii
+          Get-Content "$name.zip.sha256" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding ascii
+          "ASSET=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CHECKSUM=$name.zip.sha256" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ env.ASSET }}
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: llama-server (Unlimited-OCR-2) ${{ inputs.release_tag }}
+          body: >
+            Unlimited-OCR-2 llama-server built from official ggml-org/llama.cpp
+            b11913 (7aca0d2ea8d92b56911233b822db01f9fbb1ae50) with
+            llama/unlimited-ocr2.patch from unlocr commit ${{ github.sha }}.
+            OpenSSL disabled. Not a product release. Never mutate a published
+            asset: use a new tag for a rebuild.
+          prerelease: true
+          make_latest: false
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.CHECKSUM }}
