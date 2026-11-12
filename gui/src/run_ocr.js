@@ -208,8 +208,8 @@ export async function runOcrOnPath(path, ui, mdPane, unlistensRef, outOverride) 
     addNotification("done", tr("run.ocrComplete", { stem }), mdPath || "");
     return true;
   } catch (err) {
-    // User-initiated stop is not a failure. The backend killed the local server
-    // and dropped the model, so refresh the gate (Run -> "Load a model first").
+    // User-initiated stop is not a failure. Refresh the gate while retaining the
+    // warm model so another run can start without loading it again.
     const wasStopped = String(err).trim() === "stopped";
     if (ui) {
       ui.setRunning(false);
@@ -228,11 +228,10 @@ export async function runOcrOnPath(path, ui, mdPane, unlistensRef, outOverride) 
       // The backend already finished this file's job row as "failed: stopped by
       // user" before returning the "stopped" error, so no frontend record here.
       const stem = (splitPath(path) || {}).name || path;
-      showToast("run:" + path, { kind: "info", title: tr("run.ocrStopped", { stem }), meta: tr("run.reloadToRunAgain") });
+      showToast("run:" + path, { kind: "info", title: tr("run.ocrStopped", { stem }), meta: tr("run.stoppedByUser") });
       removeToast("run:" + path, 6000);
       addNotification("info", tr("run.ocrStoppedInfo", { stem }), tr("run.stoppedByUser"));
-      // Sentinel so a batch loop can stop dispatching the remaining files (the
-      // model was dropped; they would all fail "load a model first").
+      // Sentinel so a batch loop stops dispatching the remaining files.
       return "stopped";
     }
     // A per-file failure is recorded by the backend (it finishes the job row as

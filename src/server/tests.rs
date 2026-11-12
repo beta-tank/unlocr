@@ -4,6 +4,125 @@ use serde_json::json;
 use std::ffi::OsString;
 use std::path::Path;
 
+/// Simulate llama-server's disconnect cancellation: a pending request must close
+/// its socket (also during TTFT), then the same server must serve a fresh run.
+fn cancel_stream_and_reuse_server(send_token: bool) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancel_on_server = Arc::clone(&cancelled);
+
+    let server = std::thread::spawn(move || {
+        for attempt in 0..2 {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(length) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = length.trim().parse::<usize>().unwrap();
+                }
+            }
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()["stream"],
+                true
+            );
+
+            if attempt == 0 {
+                if send_token {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n").unwrap();
+                } else {
+                    // Cancel before the server has sent any HTTP headers.
+                    cancel_on_server.store(true, Ordering::SeqCst);
+                }
+                let mut byte = [0];
+                match reader.read(&mut byte) {
+                    Ok(0) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+                    other => panic!("cancel must disconnect the active request: {other:?}"),
+                }
+            } else {
+                let body = "data: {\"choices\":[{\"delta\":{\"content\":\"fresh run\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        }
+    });
+
+    let mut partial = String::new();
+    let started = std::time::Instant::now();
+    let stopped = ocr_via_stream(
+        &base_url,
+        None,
+        None,
+        "OCR",
+        "data:image/png;base64,AA==",
+        100,
+        0.0,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut |token| {
+            partial.push_str(token);
+            cancelled.store(true, Ordering::SeqCst);
+            true
+        },
+        &|| cancelled.load(Ordering::SeqCst),
+    );
+    assert_eq!(stopped.unwrap_err().to_string(), "stopped");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(partial, if send_token { "partial" } else { "" });
+
+    cancelled.store(false, Ordering::SeqCst);
+    let next = ocr_via_stream(
+        &base_url,
+        None,
+        None,
+        "OCR",
+        "data:image/png;base64,AA==",
+        100,
+        0.0,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut |_| true,
+        &|| cancelled.load(Ordering::SeqCst),
+    )
+    .unwrap();
+    assert_eq!(next.text, "fresh run");
+    assert!(!next.truncated);
+    server.join().unwrap();
+}
+
+#[test]
+fn cancel_during_ttft_disconnects_and_allows_another_run() {
+    cancel_stream_and_reuse_server(false);
+}
+
+#[test]
+fn cancel_during_stream_disconnects_and_allows_another_run() {
+    cancel_stream_and_reuse_server(true);
+}
+
 /// The optional DeepSeek-OCR flags must reach the spawn args only when set,
 /// and the baseline must keep the single-sequence, bounded-context startup
 /// required by Unlimited-OCR-2, without spawning a real model.

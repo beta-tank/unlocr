@@ -115,7 +115,7 @@ export function makeUi() {
       });
   }
 
-  // Run OCR is gated on a LOADED model (litellm-style) and no run in flight. The
+  // Starting OCR is gated on a LOADED model; an active run offers Stop instead. The
   // load itself validates the environment for the chosen mode (local needs
   // llama-server + pdftoppm; remote needs only pdftoppm), so a successful load is
   // proof the env is runnable — we do not also gate on preflight here (that would
@@ -124,12 +124,13 @@ export function makeUi() {
   let envOk = false;
   let modelLoaded = false;
   let running = false;
+  let stopping = false;
   function gate() {
     if (!runBtn) return;
-    runBtn.disabled = !modelLoaded || running;
+    runBtn.disabled = running ? stopping : !modelLoaded;
     runBtn.classList.toggle("is-blocked", !running && !modelLoaded);
     if (running) {
-      runBtn.textContent = tr("run.runningBtn");
+      runBtn.textContent = tr(stopping ? "run.stopping" : "run.stop");
     } else if (!modelLoaded) {
       runBtn.textContent = tr("run.loadModelFirst");
     } else {
@@ -186,6 +187,25 @@ export function makeUi() {
     },
     isRunning() {
       return running;
+    },
+    async stopOcr() {
+      if (!running || stopping) return;
+      stopping = true;
+      gate();
+      if (stopBtn) stopBtn.disabled = true;
+      this.setStatus(tr("run.stopping"));
+      try {
+        const t = requireTauri();
+        await t.core.invoke("stop_ocr");
+      } catch (err) {
+        // Allow a retry if the cancellation command could not be delivered.
+        if (running) {
+          stopping = false;
+          gate();
+          if (stopBtn) stopBtn.disabled = false;
+          this.fail(String(err));
+        }
+      }
     },
     /** Append one streamed token chunk for `page` to both the transcript (one
      *  <pre> per page) and the popup log. Centralized here so subscribeOcrEvents
@@ -262,6 +282,7 @@ export function makeUi() {
     },
     setRunning(on) {
       running = on;
+      stopping = false;
       gate();
       setControlsDisabled(on);
       // EH-0005: mark the transcript region busy while a run is in flight so AT
@@ -271,8 +292,8 @@ export function makeUi() {
         if (stopBtn) stopBtn.disabled = false;
         this.openPopup();
       } else {
-        // Run ended (done/fail/stopped): disable Stop so it can't kill the warm
-        // server when no run is in flight, and drop the "minimized" toast.
+        // Run ended (done/fail/stopped): disable Stop when no request is active,
+        // and drop the "minimized" toast.
         if (stopBtn) stopBtn.disabled = true;
         removeToast("ocr:running");
       }
@@ -325,20 +346,11 @@ export function makeUi() {
     },
   };
 
-  // Stop: ask the backend to cancel (kills the local server -> in-flight read
-  // aborts; run_ocr remaps to "stopped"). One-shot: disable the button + show
+  // Stop: ask the backend to cancel the HTTP stream while keeping the model warm
+  // (run_ocr remaps to "stopped"). One-shot: disable both buttons + show
   // intent. The run's catch path surfaces the final "stopped" state.
   if (stopBtn) {
-    stopBtn.addEventListener("click", async () => {
-      stopBtn.disabled = true;
-      api.setStatus(tr("run.stopping"));
-      try {
-        const t = requireTauri();
-        await t.core.invoke("stop_ocr");
-      } catch (err) {
-        // Best-effort; the run will still error out on its own.
-      }
-    });
+    stopBtn.addEventListener("click", () => api.stopOcr());
   }
 
   // Close (×): minimize. If a run is in flight, leave a clickable toast that

@@ -139,9 +139,7 @@ pub(crate) fn process_single_input(
     };
 
     let out = match outcome {
-        Ok(v) => v,
-        Err(e) if state.cancel.load(Ordering::SeqCst) => {
-            let _ = e;
+        _ if should_cancel() => {
             if let Some(j) = &job {
                 let _ =
                     store::finish_job(&j.id, "failed", "", "stopped by user", &make_metrics(None));
@@ -149,6 +147,7 @@ pub(crate) fn process_single_input(
             }
             return Ok(None);
         }
+        Ok(v) => v,
         Err(e) => {
             let msg = format!("{}: {}", input_path.display(), e);
             if let Some(j) = &job {

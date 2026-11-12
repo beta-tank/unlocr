@@ -1,6 +1,6 @@
 // Shared app state for the unlocr GUI backend. The command handlers live in the
 // `cmd_*` modules; this module holds the managed state they all touch (the warm
-// model, the resolved pdftoppm, the cancel flag, and the held server pid).
+// model, the resolved pdftoppm, and the cancel flag).
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -37,13 +37,9 @@ pub(crate) struct AppState {
     pub(crate) model: Mutex<Option<LoadedModel>>,
     pub(crate) pdftoppm: Mutex<Option<PathBuf>>,
     // Set true by `stop_ocr` to abort an in-flight run; reset at the start of each
-    // run (and at load). The run loop checks it at page boundaries; `stop_ocr` also
-    // kills the local server below so an in-flight stream read aborts immediately.
+    // run. The HTTP client polls it during connection/streaming and closes only
+    // the active request, keeping the local server and its model alive.
     pub(crate) cancel: AtomicBool,
-    // PID of the held local llama-server, stashed at load so `stop_ocr` can kill it
-    // WITHOUT taking the `model` lock (the run loop holds that lock for the whole
-    // batch). None for the remote backend (nothing local to kill).
-    pub(crate) server_pid: Mutex<Option<u32>>,
     // Last time the model was loaded or a run finished, for the idle-unload watcher
     // (lib.rs): it drops the warm model after the configured idle window to reclaim
     // the GGUF RAM. None until first load (treated as "no model / not idle"). Option

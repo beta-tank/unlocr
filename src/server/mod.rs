@@ -249,6 +249,8 @@ fn handle_stream_chunk(
 
 /// POST with `stream: true` and consume the SSE response, calling `on_token`
 /// for each `choices[0].delta.content` chunk. Returns the full assembled text.
+/// Cancellation drops the pending request/response, closing its HTTP stream.
+/// llama-server cancels the associated task on disconnect and retains the model.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ocr_via_stream(
     base_url: &str,
@@ -266,6 +268,9 @@ pub(crate) fn ocr_via_stream(
     on_token: &mut dyn FnMut(&str) -> bool,
     should_cancel: &dyn Fn() -> bool,
 ) -> Res<OcrResult> {
+    if should_cancel() {
+        return Err("stopped".into());
+    }
     let url = format!("{base_url}/v1/chat/completions");
     let mut body = serde_json::json!({
         "temperature": temperature,

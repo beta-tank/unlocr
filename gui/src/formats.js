@@ -15,6 +15,7 @@ export function isAcceptedInputPath(path) {
 // shape), shared by every Import/Add-files dialog so the accepted extensions
 // can't drift between call sites.
 export const FILE_DIALOG_FILTERS = [
+  { name: "PDF / Image", extensions: ["pdf", ...IMAGE_EXTENSIONS] },
   { name: "PDF", extensions: ["pdf"] },
   { name: "Image", extensions: IMAGE_EXTENSIONS },
 ];

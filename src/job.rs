@@ -236,9 +236,9 @@ where
     // (write_markdown_output) without re-splitting the combined string.
     let mut pages_text: Vec<(usize, String)> = Vec::with_capacity(n);
     for (i, page) in pages.iter().enumerate() {
-        // Stop (GUI) sets this; the local backend also kills llama-server so an
-        // in-flight stream errors out, but checking here stops the remote backend
-        // (no pid to kill) at the next page boundary. Err is remapped to "stopped"
+        // Stop (GUI) sets this; the HTTP client also checks it while awaiting
+        // headers/tokens and closes the active request without killing the server.
+        // Checking here prevents starting another page. Err is remapped to "stopped"
         // by the GUI's run_ocr (cmd_run.rs); the CLI never cancels (|| false).
         if should_cancel() {
             return Err("stopped".into());

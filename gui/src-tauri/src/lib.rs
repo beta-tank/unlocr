@@ -146,7 +146,6 @@ pub fn run() {
                     }
                 };
                 if unloaded {
-                    *state.server_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
                     *state.last_used.lock().unwrap_or_else(|p| p.into_inner()) = None;
                     // Tell the UI so the titlebar badge + Run gate reflect the unload.
                     let _ = handle.emit("model://unloaded", ());

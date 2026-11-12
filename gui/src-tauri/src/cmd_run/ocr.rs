@@ -93,11 +93,10 @@ pub(crate) async fn run_ocr(
             opts.keep_images,
         );
 
-        let is_local;
         {
             let guard = state.model.lock().unwrap_or_else(|p| p.into_inner());
             let lm = guard.as_ref().ok_or("load a model first")?;
-            is_local = matches!(&lm.backend, Backend::Local(_));
+            let is_local = matches!(&lm.backend, Backend::Local(_));
 
             // Local GGUF quants fall into infinite-loop output on dense pages; a
             // repeat penalty escapes it. Default to 1.3 when the user left the
@@ -143,15 +142,11 @@ pub(crate) async fn run_ocr(
             }
         }
 
+        // Cancellation only closes the generation request, so retain the warm
+        // backend for the next run. A late Stop after completion is harmless.
+        state.cancel.store(false, Ordering::SeqCst);
         if stopped {
-            *state.model.lock().unwrap_or_else(|p| p.into_inner()) = None;
-            *state.server_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
             return Err("stopped".to_string());
-        }
-        let tail_stop = state.cancel.swap(false, Ordering::SeqCst);
-        if tail_stop && is_local {
-            *state.model.lock().unwrap_or_else(|p| p.into_inner()) = None;
-            *state.server_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
         }
 
         if !errors.is_empty() {
@@ -184,7 +179,6 @@ pub(crate) async fn run_ocr(
         Err(e) => {
             let state = app_for_join.state::<AppState>();
             *state.model.lock().unwrap_or_else(|p| p.into_inner()) = None;
-            *state.server_pid.lock().unwrap_or_else(|p| p.into_inner()) = None;
             Err(format!("ocr worker join failed: {e}"))
         }
     }

@@ -30,7 +30,14 @@ export function wireRunButton(ui, mdPane, unlistensRef, getQueuedPaths) {
   const pathInput = document.getElementById("pdfPath");
   if (!runBtn) return;
 
-  runBtn.addEventListener("click", () => {
+  runBtn.addEventListener("click", (event) => {
+    if (ui.isRunning()) {
+      // This click cancels OCR, rather than consuming the pending import queue
+      // in the later click listener registered by main.js.
+      event.stopImmediatePropagation();
+      void ui.stopOcr();
+      return;
+    }
     // Prefer the multi-file queue; fall back to the typed-path field for
     // single-file entry without the picker.
     const queued = typeof getQueuedPaths === "function" ? getQueuedPaths() : [];
@@ -78,8 +85,8 @@ export function wireRunButton(ui, mdPane, unlistensRef, getQueuedPaths) {
         } finally {
           ui.setStatus = originalSetStatus;
         }
-        // A user Stop drops the model; remaining queued files would all fail
-        // "load a model first", so halt the batch instead of spamming errors.
+        // Stop cancels the batch as well as the active generation; leave the
+        // model loaded for a later explicit run.
         if (r === "stopped") break;
       }
       } finally {
@@ -175,7 +182,7 @@ export function wireLibraryDrop(ui, mdPane, unlistensRef) {
         // custom filename (each writes {stem}.md into the folder / beside input).
         const outDir = (document.getElementById("outFolder") || {}).value || "";
         const r = await runOcrOnPath(pdf, ui, mdPane, unlistensRef, { dir: outDir, file: null });
-        // User Stop dropped the model; halt the rest of the dropped batch.
+        // User Stop cancels the remaining batch, keeping the model loaded.
         if (r === "stopped") break;
       }
     } finally {
