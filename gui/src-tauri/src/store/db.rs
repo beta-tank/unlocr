@@ -8,8 +8,8 @@ pub(crate) fn insert(conn: &Connection, job: &Job) -> Result<(), String> {
         "INSERT OR REPLACE INTO jobs
            (id, input_path, quant, max_tokens, dpi, prompt, keep_images,
             status, output_path, error, created_at, updated_at,
-            page_count, duration_ms, backend, output_mode)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            page_count, duration_ms, backend, output_mode, effective_config)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             job.id,
             job.input_path,
@@ -27,6 +27,10 @@ pub(crate) fn insert(conn: &Connection, job: &Job) -> Result<(), String> {
             job.duration_ms.map(|v| v as i64),
             job.backend,
             job.output_mode,
+            job.options
+                .effective_config
+                .as_ref()
+                .map(serde_json::Value::to_string),
         ],
     )
     .map_err(|e| format!("could not insert job {}: {e}", job.id))?;
@@ -89,7 +93,7 @@ pub(crate) fn list(conn: &Connection) -> Result<Vec<Job>, String> {
         .prepare(
             "SELECT id, input_path, quant, max_tokens, dpi, prompt, keep_images,
                     status, output_path, error, created_at, updated_at,
-                    page_count, duration_ms, backend, output_mode
+                    page_count, duration_ms, backend, output_mode, effective_config
              FROM jobs ORDER BY created_at DESC",
         )
         .map_err(|e| format!("could not prepare jobs select: {e}"))?;
@@ -99,6 +103,18 @@ pub(crate) fn list(conn: &Connection) -> Result<Vec<Job>, String> {
                 id: row.get(0)?,
                 input_path: row.get(1)?,
                 options: JobOptions {
+                    effective_config: row
+                        .get::<_, Option<String>>(16)?
+                        .map(|json| {
+                            serde_json::from_str(&json).map_err(|e| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    16,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(e),
+                                )
+                            })
+                        })
+                        .transpose()?,
                     quant: row.get(2)?,
                     max_tokens: row.get(3)?,
                     dpi: row.get(4)?,

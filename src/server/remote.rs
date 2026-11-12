@@ -2,7 +2,9 @@ use super::{ocr_via, ocr_via_stream, ImageOcr, OcrResult};
 use crate::Res;
 use std::time::Duration;
 
-/// Configuration and client for a remote OpenAI-compatible OCR endpoint.
+/// Configuration and client for a generic remote OpenAI-compatible OCR endpoint.
+/// All llama.cpp-only sampling arguments are deliberately ignored at this adapter
+/// boundary, including direct library calls and both HTTP response modes.
 pub struct RemoteEndpoint {
     /// Base URL with no trailing slash, e.g. `https://host:8080`. `/v1/chat/completions`
     /// is appended for inference, `/v1/models` for the load-time probe.
@@ -42,11 +44,11 @@ impl ImageOcr for RemoteEndpoint {
         data_uri: &str,
         max_tokens: u32,
         temperature: Option<f32>,
-        repeat_penalty: Option<f32>,
-        dry_multiplier: Option<f32>,
-        dry_base: Option<f32>,
-        dry_allowed_length: Option<u32>,
-        dry_penalty_last_n: Option<i32>,
+        _repeat_penalty: Option<f32>,
+        _dry_multiplier: Option<f32>,
+        _dry_base: Option<f32>,
+        _dry_allowed_length: Option<u32>,
+        _dry_penalty_last_n: Option<i32>,
     ) -> Res<OcrResult> {
         ocr_via(
             self.base_url.trim_end_matches('/'),
@@ -56,11 +58,11 @@ impl ImageOcr for RemoteEndpoint {
             data_uri,
             max_tokens,
             temperature.unwrap_or(0.0),
-            repeat_penalty,
-            dry_multiplier,
-            dry_base,
-            dry_allowed_length,
-            dry_penalty_last_n,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
     }
 
@@ -70,11 +72,11 @@ impl ImageOcr for RemoteEndpoint {
         data_uri: &str,
         max_tokens: u32,
         temperature: Option<f32>,
-        repeat_penalty: Option<f32>,
-        dry_multiplier: Option<f32>,
-        dry_base: Option<f32>,
-        dry_allowed_length: Option<u32>,
-        dry_penalty_last_n: Option<i32>,
+        _repeat_penalty: Option<f32>,
+        _dry_multiplier: Option<f32>,
+        _dry_base: Option<f32>,
+        _dry_allowed_length: Option<u32>,
+        _dry_penalty_last_n: Option<i32>,
         on_token: &mut dyn FnMut(&str) -> bool,
         should_cancel: &dyn Fn() -> bool,
     ) -> Res<OcrResult> {
@@ -86,11 +88,11 @@ impl ImageOcr for RemoteEndpoint {
             data_uri,
             max_tokens,
             temperature.unwrap_or(0.0),
-            repeat_penalty,
-            dry_multiplier,
-            dry_base,
-            dry_allowed_length,
-            dry_penalty_last_n,
+            None,
+            None,
+            None,
+            None,
+            None,
             on_token,
             should_cancel,
         )

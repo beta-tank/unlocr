@@ -21,6 +21,7 @@ pub(crate) fn validate_and_prepare_options(
     last_page: Option<u32>,
     output_mode: Option<&str>,
     passwords: Option<Vec<String>>,
+    result_format: Option<&str>,
 ) -> Result<(OcrOptions, OutputMode), String> {
     let mut opts = OcrOptions::default();
     if let Some(t) = max_tokens {
@@ -35,11 +36,8 @@ pub(crate) fn validate_and_prepare_options(
     if let Some(k) = keep_images {
         opts.keep_images = k;
     }
-    opts.repeat_penalty = repeat_penalty;
-    opts.dry_multiplier = dry_multiplier;
-    opts.dry_base = dry_base;
-    opts.dry_allowed_length = dry_allowed_length;
-    opts.dry_penalty_last_n = dry_penalty_last_n;
+    opts.result_format = unlocr::parse_result_format(result_format.unwrap_or("markdown"))
+        .map_err(|e| e.to_string())?;
     opts.temperature = temperature;
     opts.pages = match (first_page, last_page) {
         (None, None) => None,
@@ -55,6 +53,13 @@ pub(crate) fn validate_and_prepare_options(
     // None here (it is a load-time flag, validated in `load_model`); validate()
     // covers dpi / max_tokens / repeat_penalty and the page range.
     opts.validate().map_err(|e| e.to_string())?;
+    // Sampling is validated after the loaded backend/profile has resolved it.
+    // Stale manual controls must not reject a default-profile or remote run.
+    opts.repeat_penalty = repeat_penalty;
+    opts.dry_multiplier = dry_multiplier;
+    opts.dry_base = dry_base;
+    opts.dry_allowed_length = dry_allowed_length;
+    opts.dry_penalty_last_n = dry_penalty_last_n;
 
     if out_file.is_some() && inputs.len() > 1 {
         return Err("out_file names a single file; clear it for multiple inputs".to_string());
@@ -89,4 +94,116 @@ pub(crate) fn validate_and_prepare_options(
     );
 
     Ok((opts, mode))
+}
+
+pub(crate) fn apply_repetition_profile(
+    opts: &mut OcrOptions,
+    local: bool,
+    profile: Option<&str>,
+) -> Result<String, String> {
+    let profile = profile.unwrap_or("default");
+    if !matches!(profile, "default" | "enhanced" | "manual") {
+        return Err("repetition_profile must be default, enhanced, or manual".into());
+    }
+    if !local || profile != "manual" {
+        opts.repeat_penalty = None;
+        opts.dry_multiplier = None;
+        opts.dry_base = None;
+        opts.dry_allowed_length = None;
+        opts.dry_penalty_last_n = None;
+    }
+    if local {
+        opts.repeat_penalty.get_or_insert(1.3);
+        opts.dry_multiplier.get_or_insert(1.0);
+        // Materialize the actual request-builder fallback in the run snapshot.
+        opts.dry_allowed_length.get_or_insert(4);
+        if profile == "enhanced" {
+            opts.dry_allowed_length = Some(2);
+            opts.dry_penalty_last_n = Some(unlocr::server::LOCAL_CONTEXT_SIZE);
+        }
+        // Old manual profiles use the CLI's -1 alias. Record the same positive
+        // window that the HTTP builder sends, including for restored settings.
+        if opts.dry_penalty_last_n == Some(-1) {
+            opts.dry_penalty_last_n = Some(unlocr::server::LOCAL_CONTEXT_SIZE);
+        }
+    }
+    opts.validate().map_err(|e| e.to_string())?;
+    Ok(if local { profile } else { "default" }.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stale_manual() -> OcrOptions {
+        OcrOptions {
+            repeat_penalty: Some(f32::NAN),
+            dry_multiplier: Some(-5.0),
+            dry_base: Some(0.0),
+            dry_allowed_length: Some(0),
+            dry_penalty_last_n: Some(-9),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn default_and_enhanced_ignore_stale_manual_values() {
+        let mut opts = stale_manual();
+        assert_eq!(
+            apply_repetition_profile(&mut opts, true, None).unwrap(),
+            "default"
+        );
+        assert_eq!(opts.repeat_penalty, Some(1.3));
+        assert_eq!(opts.dry_multiplier, Some(1.0));
+        assert_eq!(opts.dry_base, None);
+        assert_eq!(opts.dry_allowed_length, Some(4));
+        assert_eq!(opts.dry_penalty_last_n, None);
+        apply_repetition_profile(&mut opts, true, Some("enhanced")).unwrap();
+        assert_eq!(opts.dry_allowed_length, Some(2));
+        assert_eq!(
+            opts.dry_penalty_last_n,
+            Some(unlocr::server::LOCAL_CONTEXT_SIZE)
+        );
+    }
+
+    #[test]
+    fn manual_validates_overrides_and_remote_strips_them() {
+        assert!(apply_repetition_profile(&mut stale_manual(), true, Some("manual")).is_err());
+        let mut opts = OcrOptions {
+            repeat_penalty: Some(1.0),
+            dry_multiplier: Some(0.0),
+            ..Default::default()
+        };
+        apply_repetition_profile(&mut opts, true, Some("manual")).unwrap();
+        assert_eq!(opts.repeat_penalty, Some(1.0));
+        assert_eq!(opts.dry_multiplier, Some(0.0));
+        let mut opts = stale_manual();
+        assert_eq!(
+            apply_repetition_profile(&mut opts, false, Some("enhanced")).unwrap(),
+            "default"
+        );
+        assert_eq!(opts.repeat_penalty, None);
+        assert_eq!(opts.dry_multiplier, None);
+        assert_eq!(opts.dry_allowed_length, None);
+        assert_eq!(opts.dry_base, None);
+        assert_eq!(opts.dry_penalty_last_n, None);
+    }
+
+    #[test]
+    fn legacy_manual_window_is_resolved_for_effective_history() {
+        let mut opts = OcrOptions {
+            dry_penalty_last_n: Some(-1),
+            ..Default::default()
+        };
+        apply_repetition_profile(&mut opts, true, Some("manual")).unwrap();
+        assert_eq!(
+            opts.dry_penalty_last_n,
+            Some(unlocr::server::LOCAL_CONTEXT_SIZE)
+        );
+        for window in [0, 128] {
+            opts.dry_penalty_last_n = Some(window);
+            apply_repetition_profile(&mut opts, true, Some("manual")).unwrap();
+            assert_eq!(opts.dry_penalty_last_n, Some(window));
+        }
+    }
 }

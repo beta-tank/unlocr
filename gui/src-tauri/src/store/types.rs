@@ -62,6 +62,9 @@ pub struct JobMetrics {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobOptions {
+    /// Backend-derived load + resolved run configuration; unknown for old history.
+    #[serde(default)]
+    pub effective_config: Option<serde_json::Value>,
     pub quant: String,
     pub max_tokens: u32,
     pub dpi: u32,
@@ -80,11 +83,17 @@ impl JobOptions {
         keep_images: bool,
     ) -> Self {
         Self {
+            effective_config: None,
             quant: quant.to_string(),
             max_tokens,
             dpi,
             prompt: prompt.to_string(),
             keep_images,
         }
+    }
+
+    pub fn with_effective_config(mut self, config: serde_json::Value) -> Self {
+        self.effective_config = Some(config);
+        self
     }
 }

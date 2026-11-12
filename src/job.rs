@@ -1,7 +1,7 @@
 use crate::inputs::{is_image, is_pdf, sniff_image_mime};
 use crate::model;
-use crate::options::{OcrOptions, OcrOutput, Progress};
-use crate::output::{clean_layout_annotations, push_page, AnnotationStripper};
+use crate::options::{OcrOptions, OcrOutput, Progress, ResultFormat};
+use crate::output::{format_result, push_page, AnnotationStripper};
 use crate::pdf;
 use crate::preflight;
 use crate::server;
@@ -9,11 +9,11 @@ use crate::Res;
 use base64::Engine;
 use std::path::{Path, PathBuf};
 
-/// Drive one PDF end to end and return the assembled markdown, emitting progress
+/// Drive one PDF end to end and return the selected result format, emitting progress
 /// through `on_progress`. This is the canonical, clap-free OCR entry point used
 /// by both the Tauri bridge and (after refactor) the CLI path.
 ///
-/// The caller owns writing the markdown to disk: both the CLI and the GUI call
+/// The caller owns writing the result to disk: both the CLI and the GUI call
 /// the shared `write_markdown_output` helper (single file / per-page folder /
 /// both). That keeps the lib free of an output-dir concept in `OcrOptions`: the
 /// layout decision is a parameter to the write helper, not a field on the
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 /// Spawns llama-server and kills it on drop (server::Server's Drop), so the
 /// success path does not orphan it.
 ///
-/// Returns an `OcrOutput` (combined markdown + per-page texts + optional kept
+/// Returns an `OcrOutput` (combined output + per-page texts + optional kept
 /// image dir) so a caller can lay it out however it likes. This is the GUI's
 /// entry point; the CLI drives `ocr_pages` directly.
 ///
@@ -83,7 +83,7 @@ where
 
 /// Rasterize one PDF to PNGs and OCR each page in order, emitting a Page
 /// progress event per page. Returns an `OcrOutput` carrying both the combined
-/// page-delimited markdown and the per-page texts (so a caller can write
+/// output in the selected format and the per-page texts (so a caller can write
 /// per-page files without re-splitting), plus, when `opts.keep_images` is set,
 /// the directory the page PNGs were kept in (so the CLI can report it; the handle
 /// is leaked there to keep the files on disk). Shared by run_ocr_job (lib) and,
@@ -223,13 +223,10 @@ where
     }
     let n = pages.len();
 
-    // The model emits layout-grounded output (`label [x, y, x, y]content`) that
-    // upstream cleans in Python; we port that cleanup here (output.rs). Gate on
-    // the model-facing prompt itself instead of a parallel flag: the grounding
-    // task preset (CLI Task::Grounding, GUI TASK_PROMPTS.grounding) carries the
-    // `<|grounding|>` marker, and a user who typed it explicitly wants raw boxes.
-    let strip = !opts.prompt.contains("<|grounding|>");
-    let plain_text = opts.prompt.trim() == "Free OCR.";
+    // Representation is explicitly selected by the caller, never inferred from
+    // a prompt. Legacy CLI task compatibility is resolved in CLI glue only.
+    let strip = opts.result_format != ResultFormat::Raw;
+    let plain_text = opts.result_format == ResultFormat::Text;
 
     let mut md = String::new();
     // Capture each page's text separately so a caller can write per-page files
@@ -320,16 +317,24 @@ where
                 // on_token was never called (default ImageOcr::ocr_image_stream
                 // fallback): nothing went through the stripper, so strip the raw
                 // text directly.
-                clean_layout_annotations(&result.text, plain_text)
+                format_result(&result.text, opts.result_format)
             }
         } else {
             result.text
         };
-        // push_page writes page idx+1, so pass the real page number minus one.
-        push_page(&mut md, page_num - 1, text.trim());
-        // Same trimmed text the combined string holds, retained per-page so a
-        // caller can write per-page files without re-splitting on the delimiter.
-        pages_text.push((page_num, text.trim().to_string()));
+        match opts.result_format {
+            ResultFormat::Markdown => push_page(&mut md, page_num - 1, text.trim()),
+            ResultFormat::Text => {
+                if i > 0 {
+                    md.push('\x0c');
+                }
+                md.push_str(text.trim());
+            }
+            ResultFormat::Raw => md.push_str(&text),
+        }
+        let text = if strip { text.trim().to_string() } else { text };
+        // Keep an entry even for empty pages: later page numbers never shift.
+        pages_text.push((page_num, text));
     }
 
     let kept = if opts.keep_images {
@@ -341,7 +346,11 @@ where
         None
     };
     Ok(OcrOutput {
-        combined: md.trim_start().to_string(),
+        combined: if opts.result_format == ResultFormat::Markdown {
+            md.trim_start().to_string()
+        } else {
+            md
+        },
         pages: pages_text,
         kept_images: kept,
     })

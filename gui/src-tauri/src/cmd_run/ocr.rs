@@ -38,6 +38,8 @@ pub(crate) async fn run_ocr(
     quant: Option<String>,
     output_mode: Option<String>,
     passwords: Option<Vec<String>>,
+    repetition_profile: Option<String>,
+    result_format: Option<String>,
 ) -> Result<RunResult, String> {
     let (mut opts, mode) = validation::validate_and_prepare_options(
         &inputs,
@@ -56,6 +58,7 @@ pub(crate) async fn run_ocr(
         last_page,
         output_mode.as_deref(),
         passwords,
+        result_format.as_deref(),
     )?;
 
     let out_dir = PathBuf::from(out_dir);
@@ -85,34 +88,34 @@ pub(crate) async fn run_ocr(
         let mut errors = Vec::new();
         let mut stopped = false;
 
-        let job_opts = JobOptions::from_opts(
-            quant.as_deref().unwrap_or(&opts.quant),
-            opts.max_tokens,
-            opts.dpi,
-            &opts.prompt,
-            opts.keep_images,
-        );
-
+        // The run's backend comes from the held model, never stale form fields.
+        let _ = quant;
+        let effective_config;
         {
             let guard = state.model.lock().unwrap_or_else(|p| p.into_inner());
             let lm = guard.as_ref().ok_or("load a model first")?;
             let is_local = matches!(&lm.backend, Backend::Local(_));
 
-            // Local GGUF quants fall into infinite-loop output on dense pages; a
-            // repeat penalty escapes it. Default to 1.3 when the user left the
-            // field blank (None). An explicit value wins; remote (full-precision
-            // vLLM) is left alone, it does not exhibit the quant loop.
-            if is_local && opts.repeat_penalty.is_none() {
-                opts.repeat_penalty = Some(1.3);
-            }
-            // Same gating for the DRY sampler (any local GGUF quant): it stands in
-            // for the loop-preventing ngram processor that does not ship in the
-            // GGUF. Explicit value (including 0 = off) wins; remote is left alone
-            // (llama.cpp-only field). dry_base has no injected default (opt-in
-            // only, server default 1.75 applies when unset).
-            if is_local && opts.dry_multiplier.is_none() {
-                opts.dry_multiplier = Some(1.0);
-            }
+            let profile = validation::apply_repetition_profile(
+                &mut opts,
+                is_local,
+                repetition_profile.as_deref(),
+            )?;
+            effective_config = types::effective_run_config(
+                lm,
+                &opts,
+                mode,
+                &profile,
+                result_format.as_deref().unwrap_or("markdown"),
+            )?;
+            let job_opts = JobOptions::from_opts(
+                lm.effective_config.quant.as_deref().unwrap_or(""),
+                opts.max_tokens,
+                opts.dpi,
+                &opts.prompt,
+                opts.keep_images,
+            )
+            .with_effective_config(effective_config.clone());
 
             for input in &inputs {
                 match worker::process_single_input(
@@ -163,6 +166,7 @@ pub(crate) async fn run_ocr(
         Ok(RunResult {
             paths: results,
             combined: combined_acc,
+            effective_config,
         })
     })
     .await;

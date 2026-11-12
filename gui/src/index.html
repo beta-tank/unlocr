@@ -225,33 +225,17 @@
                 <div class="transcript__config">
                 <div class="transcript__engine">
                   <span class="panel__label" data-i18n="label.ocrEngine">OCR engine</span>
-                  <!-- Backend preset. llamacpp = managed-local mode (unlocr spawns
-                       llama-server, driven by the Quant control); vllm/sglang/custom
-                       are remote OpenAI-compatible endpoints. Non-custom presets hide
-                       the URL/key/model fields and (vllm/sglang) prefill #remoteUrl
-                       with the backend's default port. Wired in main.js applyPreset(). -->
                   <!-- Select + Modify open the advanced connection knobs (remote
                        URL/key/model and custom GGUF/projector) in #engineDialog.
                        The default llama.cpp path needs none of them, so they live
                        behind the button instead of cluttering the panel. -->
                   <div class="transcript__engine-row">
                     <select class="opts__select" id="enginePreset">
-                      <option value="llamacpp" selected data-i18n="engine.llamacpp">llama.cpp (managed local)</option>
-                      <option value="gpu" data-i18n="engine.gpu">GPU full model (vLLM · Unlimited-OCR-2)</option>
-                      <option value="vllm" data-i18n="engine.vllm">vLLM (http://127.0.0.1:8000)</option>
-                      <option value="sglang" data-i18n="engine.sglang">SGLang (http://127.0.0.1:30000)</option>
-                      <option value="custom" data-i18n="engine.custom">Custom endpoint</option>
+                      <option value="llamacpp" selected data-i18n="engine.llamacpp">Local model (managed llama.cpp)</option>
+                      <option value="custom" data-i18n="engine.custom">Remote server</option>
                     </select>
                     <button class="model-btn model-btn--ghost" id="engineModifyBtn" type="button" data-i18n="engine.modify">Modify…</button>
                   </div>
-                  <!-- The full (non-GGUF) model runs on vLLM, not llama.cpp. This
-                       preset just points the remote endpoint at a local vLLM serving
-                       baidu/Unlimited-OCR-2; you must start that server yourself
-                       (16GB+ VRAM). See the Colab notebook / README for the command. -->
-                  <span class="opts__hint" id="gpuHint" hidden>
-                    Needs a compatible server serving <code>baidu/Unlimited-OCR-2</code>.
-                    See the README "Run the full model on GPU" section and the Colab notebook.
-                  </span>
                 </div>
                 <!-- Model load bar (litellm-style). A model must be loaded before
                      Run OCR is enabled; loading holds it warm in RAM, Unload frees
@@ -272,23 +256,55 @@
                      these and forwards them into the run_ocr invoke payload. The
                      editable prompt lives in bite 2 (it gets its own row here). -->
                 <div class="opts" id="runOpts">
-                  <div class="panel__head"><span class="panel__label" data-i18n="label.engineOptions">Engine options</span></div>
+                  <div class="panel__head"><span class="panel__label" data-i18n="opts.processing">Processing</span></div>
                   <div class="opts__grid">
-                    <label class="opts__field">
+                    <label class="opts__field opts__field--full">
                       <span class="opts__label" data-i18n="opts.quant">Quant</span>
                       <!-- Options populated at boot from list_available_quants (model.js
                            populateQuantSelects): all five published quants, cached state
                            marked, not just the 3 CLI Quality tiers. -->
                       <select class="opts__select" id="optQuant"></select>
-                      <!-- Q4_K_M is known to loop on dense pages; steer users to a
-                           bigger quant or the repeat-penalty knob below. -->
-                      <span class="opts__hint" id="quantHint" hidden>
-                        Q4_K_M can loop on dense pages. Use Q8_0/BF16 or set a repeat penalty.
-                      </span>
+                      <span class="opts__hint" data-i18n="quant.diskSize">Download sizes, not RAM/VRAM requirements.</span>
+                      <span class="opts__hint" id="projectorInfo" data-i18n="quant.projectorUnknown">Shared projector: 0.83 GB (825,245,856 B); cache status unknown.</span>
+                    </label>
+                    <label class="opts__field opts__field--full" id="visionField">
+                      <span class="opts__label" data-i18n="opts.visionMode">Image detail</span>
+                      <select class="opts__select" id="optVisionMode">
+                        <option value="auto" selected data-i18n="opts.vision.auto">Auto</option>
+                        <option value="base" data-i18n="opts.vision.base">Base — page overview</option>
+                        <option value="gundam" data-i18n="opts.vision.gundam">Gundam — dynamic tiles</option>
+                        <option value="expert" data-i18n="opts.vision.expert">Expert — numeric limit</option>
+                      </select>
+                      <span class="opts__hint" data-i18n="opts.visionHint">Auto uses the model profile. Base limits vision to 273 tokens; Gundam uses default tiling. Changes require reloading.</span>
+                    </label>
+                    <p class="opts__hint opts__field--full" id="embeddedTemplate" data-i18n="opts.embeddedTemplate">Embedded Unlimited-OCR-2 template</p>
+                    <label class="opts__field opts__field--full">
+                      <span class="opts__label" data-i18n="opts.resultFormat">Result format</span>
+                      <select class="opts__select" id="optResultFormat">
+                        <option value="markdown" selected data-i18n="opts.format.markdown">Markdown</option>
+                        <option value="text" data-i18n="opts.format.text">Plain text</option>
+                        <option value="raw" data-i18n="opts.format.raw">Raw model markup</option>
+                      </select>
+                      <span class="opts__hint" data-i18n="opts.formatHint">Converted by the app. Each page is processed independently with “Multi page parsing.”</span>
+                    </label>
+                  </div>
+                  <details class="opts__advanced" open>
+                    <summary data-i18n="opts.inputPreparation">Input preparation</summary>
+                    <div class="opts__grid">
+                    <label class="opts__field opts__field--full">
+                      <span class="opts__label" data-i18n="opts.dpiProfile">PDF rasterization profile</span>
+                      <select class="opts__select" id="optDpiProfile">
+                        <option value="144" selected data-i18n="opts.dpiFast">Fast — 144 DPI</option>
+                        <option value="200" data-i18n="opts.dpiStandard">Standard — 200 DPI</option>
+                        <option value="300" data-i18n="opts.dpiFine">Small text / scans — 300 DPI</option>
+                        <option value="custom" data-i18n="opts.dpiCustom">Custom DPI</option>
+                      </select>
                     </label>
                     <label class="opts__field">
-                      <span class="opts__label" data-i18n="opts.dpi">DPI</span>
+                      <span class="opts__label" data-i18n="opts.dpi">PDF rasterization resolution (DPI)</span>
                       <input class="opts__num" id="optDpi" type="number" min="72" max="600" step="1" value="144" />
+                      <span class="opts__hint" data-i18n="opts.dpiHint">PDF pixel resolution, separate from Base/Gundam vision detail. These are app profiles, not model quality tiers.</span>
+                      <span class="opts__hint" id="dpiImageHint" hidden data-i18n="opts.dpiImageHint">Not used for image inputs.</span>
                     </label>
                     <!-- Page selection: All (default) OCRs every page; Range/Single
                          map to pdftoppm -f/-l so a subset rasterizes only those
@@ -308,7 +324,20 @@
                         <input class="opts__num" id="optPageTo" type="number" min="1" step="1" placeholder="to" data-i18n-ph="opts.toPh" hidden />
                       </span>
                     </label>
-                  </div>
+                    <label class="opts__toggle">
+                      <input class="opts__check" id="optKeepImages" type="checkbox" />
+                      <span class="opts__toggle-label" data-i18n="opts.keepImages">Keep page images</span>
+                    </label>
+                    <label class="opts__field opts__field--full">
+                      <span class="opts__label" data-i18n="opts.passwordFile">PDF password file (bulk)</span>
+                      <span class="model-path-row">
+                        <button type="button" class="model-btn model-btn--ghost" id="optPasswordFileBtn" data-i18n="opts.passwordFilePick">Choose file…</button>
+                        <span class="model-path" id="optPasswordFilePath" data-i18n="opts.passwordFileNone">No file (interactive prompt)</span>
+                        <button type="button" class="model-btn model-btn--ghost" id="optPasswordFileClear" data-i18n="action.clear">Clear</button>
+                      </span>
+                    </label>
+                    </div>
+                  </details>
                   <!-- Advanced: rare + startup-only knobs, collapsed by default.
                        IDs unchanged so readRunOptions/load_model read them whether
                        open or closed (details keeps children mounted). -->
@@ -316,23 +345,20 @@
                     <summary data-i18n="opts.advanced">Advanced</summary>
                     <div class="opts__grid">
                     <label class="opts__field">
-                      <span class="opts__label" data-i18n="opts.maxTokens">Max tokens</span>
+                      <span class="opts__label" data-i18n="opts.maxTokens">Output budget per page (tokens)</span>
                       <input class="opts__num" id="optMaxTokens" type="number" min="256" max="32768" step="1" value="8000" />
                     </label>
                     <!-- DeepSeek-OCR detail knob (--image-max-tokens). Startup-only:
                          applies on the next model Load, not mid-run. Blank = model
                          default (the current behavior). -->
-                    <label class="opts__field">
-                      <span class="opts__label" data-i18n="opts.imageMaxTokens">Image max tokens</span>
+                    <label class="opts__field" id="visionExpertField" hidden>
+                      <span class="opts__label" data-i18n="opts.imageMaxTokens">Expert vision token limit (reload)</span>
                       <input class="opts__num" id="optImageMaxTokens" type="number" min="1" max="16384" step="1" placeholder="model default" data-i18n-ph="opts.imageMaxTokensPh" />
                     </label>
                     <!-- llama-server --chat-template; startup-only (applies on Load). -->
-                    <label class="opts__field">
-                      <span class="opts__label" data-i18n="opts.chatTemplate">Chat template</span>
-                      <select class="opts__select" id="optChatTemplate">
-                        <option value="" selected data-i18n="opts.chatModelDefault">model default</option>
-                        <option value="deepseek-ocr" data-i18n="opts.chatDeepseekOcr">deepseek-ocr</option>
-                      </select>
+                    <label class="opts__field opts__field--full" id="templateExpertField" hidden>
+                      <span class="opts__label" data-i18n="opts.chatTemplate">Custom GGUF template override (expert, reload)</span>
+                      <input class="opts__text" id="optChatTemplate" type="text" spellcheck="false" placeholder="Empty = embedded GGUF template" data-i18n-ph="opts.chatModelDefault" />
                     </label>
                     <!-- Sampling temperature; blank = 0 (deterministic OCR, the
                          historical default). Unlike DRY/repeat-penalty, applies to
@@ -341,9 +367,17 @@
                       <span class="opts__label" data-i18n="opts.temperature">Temperature</span>
                       <input class="opts__num" id="optTemperature" type="number" min="0" max="2" step="0.05" placeholder="0 (deterministic, default)" data-i18n-ph="opts.temperaturePh" />
                     </label>
-                    <!-- Per-run sampling penalty; blank = 1.3 on the local backend
-                         (breaks the Q4_K_M infinite-loop failure mode), server default
-                         on remote (vLLM/SGLang, which doesn't exhibit the loop). -->
+                    <label class="opts__field opts__field--full" id="repetitionField">
+                      <span class="opts__label" data-i18n="opts.repetitionProfile">Repetition protection</span>
+                      <select class="opts__select" id="optRepetitionProfile">
+                        <option value="default" selected data-i18n="opts.repetition.default">Backend default</option>
+                        <option value="enhanced" data-i18n="opts.repetition.enhanced">Enhanced — experimental</option>
+                        <option value="manual" data-i18n="opts.repetition.manual">Manual</option>
+                      </select>
+                      <span class="opts__hint" data-i18n="opts.repetitionHint">Stronger penalties can alter legitimate repeated text, tables, and formulas.</span>
+                    </label>
+                    <div class="opts__grid opts__field--full" id="repetitionExpert" hidden>
+                    <!-- Manual local sampling; blank values use backend defaults. -->
                     <label class="opts__field">
                       <span class="opts__label" data-i18n="opts.repeatPenalty">Repeat penalty</span>
                       <input class="opts__num" id="optRepeatPenalty" type="number" min="1" max="2" step="0.05" placeholder="1.3 (local default)" data-i18n-ph="opts.repeatPenaltyPh" />
@@ -381,25 +415,8 @@
                       <span class="opts__label" data-i18n="opts.dryPenaltyLastN">DRY scan window</span>
                       <input class="opts__num" id="optDryPenaltyLastN" type="number" min="-1" step="1" placeholder="server default" data-i18n-ph="opts.dryPenaltyLastNPh" />
                     </label>
-                    <label class="opts__toggle">
-                      <input class="opts__check" id="optKeepImages" type="checkbox" />
-                      <span class="opts__toggle-label" data-i18n="opts.keepImages">Keep page images</span>
-                    </label>
-                    <!-- Bulk password file for encrypted PDFs: a plain text file, one
-                         password per line. Each PDF is tried against every line until one
-                         unlocks it, so a batch with different passwords works. A single
-                         encrypted PDF with no file loaded is prompted for interactively at
-                         run time (pdf_password.js). Never persisted (secret). -->
-                    <label class="opts__field opts__field--full">
-                      <span class="opts__label" data-i18n="opts.passwordFile">PDF password file (bulk)</span>
-                      <span class="model-path-row">
-                        <button type="button" class="model-btn model-btn--ghost" id="optPasswordFileBtn" data-i18n="opts.passwordFilePick">Choose file…</button>
-                        <span class="model-path" id="optPasswordFilePath" data-i18n="opts.passwordFileNone">No file (interactive prompt)</span>
-                        <button type="button" class="model-btn model-btn--ghost" id="optPasswordFileClear" data-i18n="action.clear">Clear</button>
-                      </span>
-                    </label>
                     </div>
-                  </details>
+                    </div>
                   <!-- Task preset: the user prompt actually sent to the model. The
                        Prompt box below is an optional verbatim OVERRIDE (empty -> this
                        preset; options.js resolves it). Unlimited-OCR uses NO system
@@ -407,10 +424,10 @@
                   <label class="opts__field opts__field--full">
                     <span class="opts__label" data-i18n="opts.task">Task</span>
                     <select class="opts__select" id="optTask">
-                      <option value="markdown" selected data-i18n="opts.taskMarkdown">Markdown</option>
-                      <option value="grounding" data-i18n="opts.taskGrounding">Markdown (grounded)</option>
-                      <option value="free" data-i18n="opts.taskFree">Free OCR (plain text)</option>
-                      <option value="figure" data-i18n="opts.taskFigure">Parse figure</option>
+                      <option value="markdown" selected data-i18n="opts.taskMarkdown">Standard — Multi page parsing.</option>
+                      <option value="grounding" data-i18n="opts.taskGrounding">Experimental — legacy grounding</option>
+                      <option value="free" data-i18n="opts.taskFree">Experimental — Free OCR.</option>
+                      <option value="figure" data-i18n="opts.taskFigure">Experimental — Parse the figure.</option>
                     </select>
                   </label>
                   <!-- Optional override. Empty -> the Task preset is sent. When filled,
@@ -426,6 +443,7 @@
                       placeholder="Leave empty to use the Task preset. Edit only for special instructions (no system prompt is sent)." data-i18n-ph="opts.promptPh"
                     ></textarea>
                   </label>
+                  </details>
                 </div>
                 </div>
                 <div class="transcript__body" id="transcriptBody">
@@ -444,7 +462,8 @@
                      change + once on load. -->
                 <div class="effective" id="effectiveSummary" aria-live="polite">
                   <span class="effective__label" data-i18n="label.effective">Effective</span>
-                  <span class="effective__vals" id="effectiveVals">Q8_0 &middot; 144 DPI &middot; 8000 tok &middot; keep images off</span>
+                  <span class="effective__vals" id="effectiveVals" tabindex="0">Model status not yet known.</span>
+                  <span class="effective__pending" id="pendingModelChanges" hidden></span>
                 </div>
                 <div class="transcript__run">
                   <button class="run-btn" id="runBtn" type="button">Run OCR</button>
@@ -787,12 +806,19 @@
         <button class="run-popup__close" value="close" type="submit" title="Close" aria-label="Close" data-i18n-aria="action.close">&times;</button>
       </form>
       <div class="model-bar__remote" id="remoteFields" hidden>
-        <input class="path-input" id="remoteUrl" type="text" spellcheck="false"
-          placeholder="http://127.0.0.1:8080  (OpenAI-compatible base URL)" />
-        <input class="path-input" id="remoteKey" type="password" spellcheck="false"
-          placeholder="API key (optional)" />
-        <input class="path-input" id="remoteModel" type="text" spellcheck="false"
-          placeholder="model name (LiteLLM/vLLM gateways; optional for bare llama-server)" />
+        <label class="opts__field">
+          <span class="opts__label" data-i18n="engine.remoteUrl">OpenAI-compatible base URL</span>
+          <input class="path-input" id="remoteUrl" type="text" spellcheck="false" placeholder="https://server.example:8080" />
+        </label>
+        <label class="opts__field">
+          <span class="opts__label" data-i18n="engine.remoteModel">Served model name</span>
+          <input class="path-input" id="remoteModel" type="text" spellcheck="false" placeholder="Name configured on your server" data-i18n-ph="engine.remoteModelPh" />
+        </label>
+        <label class="opts__field">
+          <span class="opts__label" data-i18n="engine.remoteKey">API key (optional)</span>
+          <input class="path-input" id="remoteKey" type="password" autocomplete="off" spellcheck="false" />
+        </label>
+        <p class="settings__note" data-i18n="engine.remoteNote">Use the model name served by your endpoint, not necessarily a Hugging Face repository name. Connecting does not download weights. The server manages its own vision mode and template.</p>
         <p class="settings__note" data-i18n="note.supportedBackendsShort">Unlimited-OCR-2 requires llama.cpp b11913 (7aca0d2) with the page-2D RoPE and DASH attention patch. Local mode automatically downloads the managed llama-server build. Remote servers must support Unlimited-OCR-2.</p>
       </div>
       <!-- Custom-GGUF override (local mode only; toggled by applyPreset).

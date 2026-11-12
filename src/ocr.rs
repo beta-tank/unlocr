@@ -37,6 +37,7 @@ pub fn run_pdf<S: ImageOcr>(backend: &S, pdftoppm: &Path, input: &Path, args: &A
         max_tokens: args.max_tokens,
         dpi: args.dpi,
         prompt: args.resolved_prompt(),
+        result_format: args.resolved_result_format(),
         port: args.port,
         model_dir: args.model_dir.clone(),
         keep_images: args.keep_images,

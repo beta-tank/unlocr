@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use unlocr::server::{free_port, RemoteEndpoint, Server};
 use unlocr::{OcrOptions, Progress};
 
-use crate::state::{AppState, Backend, LoadedModel};
+use crate::state::{public_endpoint_url, AppState, Backend, EffectiveModelConfig, LoadedModel};
 
 mod cache;
 pub(crate) use cache::{
@@ -28,6 +28,7 @@ pub(crate) struct ModelStatus {
     pub mode: String,
     /// Display label ("Unlimited-OCR-2 Q8_0" / the remote URL), empty when unloaded.
     pub label: String,
+    pub effective_config: Option<EffectiveModelConfig>,
 }
 
 /// Payload for the `ocr://progress` event.
@@ -72,6 +73,7 @@ pub(crate) async fn load_model(
     chat_template: Option<String>,
     model_file: Option<String>,
     mmproj_file: Option<String>,
+    vision_mode: Option<String>,
 ) -> Result<ModelStatus, String> {
     let llama_override = llama_bin
         .filter(|s| !s.trim().is_empty())
@@ -85,10 +87,16 @@ pub(crate) async fn load_model(
     if mode != "remote" && mmproj_override.is_some() && model_override.is_none() {
         return Err("mmproj_file requires model_file".to_string());
     }
-    let chat_template = chat_template.filter(|s| !s.trim().is_empty());
-    if image_max_tokens == Some(0) {
-        return Err("image_max_tokens must be greater than 0".to_string());
+    if !matches!(mode.as_str(), "local" | "remote" | "llamacpp") {
+        return Err("mode must be local or remote".into());
     }
+    let (vision_mode, image_max_tokens, chat_template) = resolve_load_options(
+        mode == "remote",
+        model_override.is_some(),
+        vision_mode.as_deref(),
+        image_max_tokens,
+        chat_template,
+    )?;
 
     let res = tauri::async_runtime::spawn_blocking(move || -> Result<ModelStatus, String> {
         {
@@ -97,7 +105,7 @@ pub(crate) async fn load_model(
             *g = None;
         }
 
-        let (backend, label, mode_out, pdftoppm) = match mode.as_str() {
+        let (backend, label, mode_out, pdftoppm, effective_config) = match mode.as_str() {
             "remote" => {
                 let base = base_url.unwrap_or_default().trim().to_string();
                 if base.is_empty() {
@@ -131,7 +139,20 @@ pub(crate) async fn load_model(
                 if let Err(e) = ep.probe() {
                     eprintln!("[load_model] remote probe failed (continuing): {e}");
                 }
-                (Backend::Remote(ep), base, "remote".to_string(), pdftoppm)
+                let public_url = public_endpoint_url(&base);
+                let config = EffectiveModelConfig {
+                    mode: "remote".into(),
+                    base_url: Some(public_url.clone()),
+                    model: ep.model.clone(),
+                    ..Default::default()
+                };
+                (
+                    Backend::Remote(ep),
+                    public_url,
+                    "remote".to_string(),
+                    pdftoppm,
+                    config,
+                )
             }
             _ => {
                 // Build the download-progress sink FIRST: preflight::check now
@@ -204,11 +225,25 @@ pub(crate) async fn load_model(
                         .unwrap_or_else(|| "custom model".to_string()),
                     None => format!("Unlimited-OCR-2 {quant}"),
                 };
+                let config = EffectiveModelConfig {
+                    mode: "local".into(),
+                    quant: model_override.is_none().then_some(quant),
+                    model: Some(label.clone()),
+                    base_url: None,
+                    model_file: Some(files.model.display().to_string()),
+                    mmproj_file: Some(files.mmproj.display().to_string()),
+                    mmproj_override: mmproj_override.as_ref().map(|p| p.display().to_string()),
+                    llama_bin_override: llama_override.as_ref().map(|p| p.display().to_string()),
+                    image_max_tokens,
+                    chat_template: chat_template.clone(),
+                    vision_mode: Some(vision_mode.clone()),
+                };
                 (
                     Backend::Local(srv),
                     label,
                     "local".to_string(),
                     tools.pdftoppm,
+                    config,
                 )
             }
         };
@@ -219,6 +254,7 @@ pub(crate) async fn load_model(
                 backend,
                 label: label.clone(),
                 mode: mode_out.clone(),
+                effective_config: effective_config.clone(),
             });
         }
         if let Ok(mut p) = state.pdftoppm.lock() {
@@ -235,6 +271,7 @@ pub(crate) async fn load_model(
             loaded: true,
             mode: mode_out,
             label,
+            effective_config: Some(effective_config),
         })
     })
     .await;
@@ -257,6 +294,7 @@ pub(crate) fn unload_model(state: State<'_, AppState>) -> ModelStatus {
         loaded: false,
         mode: String::new(),
         label: String::new(),
+        effective_config: None,
     }
 }
 
@@ -273,16 +311,92 @@ pub(crate) fn stop_ocr(state: State<'_, AppState>) {
 #[tauri::command]
 pub(crate) fn model_status(state: State<'_, AppState>) -> ModelStatus {
     let g = state.model.lock().unwrap_or_else(|p| p.into_inner());
-    match g.as_ref().map(|lm| (lm.mode.clone(), lm.label.clone())) {
-        Some((mode, label)) => ModelStatus {
+    match g.as_ref() {
+        Some(lm) => ModelStatus {
             loaded: true,
-            mode,
-            label,
+            mode: lm.mode.clone(),
+            label: lm.label.clone(),
+            effective_config: Some(lm.effective_config.clone()),
         },
         None => ModelStatus {
             loaded: false,
             mode: String::new(),
             label: String::new(),
+            effective_config: None,
         },
+    }
+}
+
+/// Resolve load-time policy before spawning/downloading anything. Old numeric
+/// limits are ignored unless the caller explicitly selects expert mode.
+fn resolve_load_options(
+    remote: bool,
+    custom_gguf: bool,
+    vision_mode: Option<&str>,
+    image_max_tokens: Option<u32>,
+    chat_template: Option<String>,
+) -> Result<(String, Option<u32>, Option<String>), String> {
+    if remote {
+        return Ok(("auto".into(), None, None));
+    }
+    let vision = vision_mode.unwrap_or("auto");
+    let limit = match vision {
+        "auto" | "gundam" => None,
+        "base" => Some(273),
+        "expert" => image_max_tokens,
+        _ => return Err("vision_mode must be auto, base, gundam, or expert".into()),
+    };
+    let opts = OcrOptions {
+        image_max_tokens: limit,
+        ..Default::default()
+    };
+    opts.validate().map_err(|e| e.to_string())?;
+    let template = if custom_gguf {
+        chat_template.filter(|s| !s.trim().is_empty())
+    } else {
+        None // Stock v2 always uses its embedded template, including stale v1 settings.
+    };
+    Ok((vision.into(), limit, template))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_load_options;
+
+    #[test]
+    fn stock_template_and_vision_ignore_stale_v1_controls() {
+        for (mode, expected) in [("auto", None), ("gundam", None), ("base", Some(273))] {
+            let (vision, limit, template) = resolve_load_options(
+                false,
+                false,
+                Some(mode),
+                Some(0),
+                Some("deepseek-ocr".into()),
+            )
+            .unwrap();
+            assert_eq!(vision, mode);
+            assert_eq!(limit, expected);
+            assert_eq!(template, None);
+        }
+        assert!(resolve_load_options(false, false, Some("expert"), Some(0), None).is_err());
+        assert!(resolve_load_options(false, false, Some("unknown"), None, None).is_err());
+    }
+
+    #[test]
+    fn custom_template_is_preserved_and_remote_ignores_local_controls() {
+        let (_, limit, template) = resolve_load_options(
+            false,
+            true,
+            Some("expert"),
+            Some(900),
+            Some("custom".into()),
+        )
+        .unwrap();
+        assert_eq!(limit, Some(900));
+        assert_eq!(template.as_deref(), Some("custom"));
+        assert_eq!(
+            resolve_load_options(true, true, Some("base"), Some(0), Some("custom".into())).unwrap(),
+            ("auto".into(), None, None)
+        );
     }
 }

@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 /// OCR parameters expressed as plain fields, no clap. These mirror the CLI
 /// flags but are owned by the library so the Tauri host can construct them from
-/// frontend state. Field set matches the board's OcrOptions spec exactly.
+/// frontend state.
 #[derive(Clone, Debug)]
 pub struct OcrOptions {
-    /// Quant tag (e.g. "Q8_0", "BF16", "Q4_K_M"). Resolved by the caller, not a
+    /// Quant tag (e.g. "Q8_0", "BF16", "AD-Q4_K"). Resolved by the caller, not a
     /// quality enum, so the lib has no opinion about the best/good/less tiers.
     pub quant: String,
     /// Max tokens generated per page (caps runaway generation on dense pages).
@@ -17,30 +17,33 @@ pub struct OcrOptions {
     pub dpi: u32,
     /// OCR prompt sent with every page.
     pub prompt: String,
+    /// Application-side output conversion, independent of the model instruction.
+    pub result_format: ResultFormat,
     /// Port for llama-server (0 = auto-pick a free port).
     pub port: u16,
     /// Model cache directory override (None = executable directory).
     pub model_dir: Option<PathBuf>,
     /// Keep the intermediate page PNGs instead of deleting them.
     pub keep_images: bool,
-    /// Cap on vision tokens per image (`--image-max-tokens`). This is DeepSeek-OCR's
-    /// base/large detail knob: more tokens = finer recognition, slower + more VRAM.
+    /// Expert vision-token limit (`--image-max-tokens`). In the pinned v2 port,
+    /// 273 selects Base; Gundam uses the port's default dynamic tiling. This is
+    /// separate from PDF rasterization DPI, not a generic quality slider.
     /// None lets the model use its default. Local-server only (set at spawn); inert
     /// for a remote endpoint, whose server already fixed this at its own launch.
     pub image_max_tokens: Option<u32>,
-    /// Named chat template forwarded to `--chat-template` (e.g. "deepseek-ocr").
-    /// None = let llama-server use the template baked into the model. Local-only.
+    /// Expert chat template override forwarded to `--chat-template`.
+    /// None uses the v2 template baked into the model. Local-only.
     pub chat_template: Option<String>,
     /// Sampling repetition penalty sent in the request body. None omits it (server
-    /// default). >1.0 (e.g. 1.3, the local-GGUF default) discourages the
-    /// infinite-loop output some quants (notably Q4_K_M) fall into on dense pages.
+    /// default). >1.0 (e.g. 1.3, the local-GGUF default) discourages
+    /// repeated output. The current local profile still needs v2 quality comparison.
     pub repeat_penalty: Option<f32>,
     /// DRY sampler strength (llama.cpp `dry_multiplier`), sent per request. None
     /// omits every DRY field (remote body unchanged); the front ends default it
     /// to 1.0 on the managed-local llama-server path (any GGUF quant), where it
-    /// stands in for the no-repeat-ngram logits processor upstream Python uses
-    /// for loop prevention. 0.0 is a valid explicit "off". When set, the shared
-    /// request builder also sends `dry_allowed_length: 4` (see `apply_sampling`).
+    /// penalizes repeated sequences. DRY is not equivalent to upstream's
+    /// no-repeat n-gram processor. 0.0 is an explicit "off". When set, the shared
+    /// request builder defaults `dry_allowed_length` to 4 (see `apply_sampling`).
     pub dry_multiplier: Option<f32>,
     /// llama.cpp `dry_base`: growth rate of the DRY penalty past
     /// `dry_allowed_length` (server default 1.75). Only reaches the wire when
@@ -56,7 +59,8 @@ pub struct OcrOptions {
     /// `dry_multiplier` is also set. Opt-in, no local default injected.
     pub dry_allowed_length: Option<u32>,
     /// llama.cpp `dry_penalty_last_n`: how many recent tokens DRY scans. -1 =
-    /// the whole context (the anti-loop preset's value), 0 = disabled, >0 = a
+    /// the whole context (a backward-compatible client alias translated to the
+    /// fixed local context size, 32768, on the HTTP wire), 0 = disabled, >0 = a
     /// fixed window. None omits the field (server default). Only reaches the wire
     /// when `dry_multiplier` is also set. Opt-in, no local default injected.
     pub dry_penalty_last_n: Option<i32>,
@@ -92,6 +96,7 @@ impl Default for OcrOptions {
             max_tokens: 8000,
             dpi: 144,
             prompt: "Multi page parsing.".to_string(),
+            result_format: ResultFormat::Markdown,
             port: 0,
             model_dir: None,
             keep_images: false,
@@ -156,8 +161,8 @@ impl OcrOptions {
         if self.dry_allowed_length == Some(0) {
             return Err("dry_allowed_length must be greater than 0".into());
         }
-        // dry_penalty_last_n has a defined -1 ("scan whole context") and 0
-        // ("disabled"); only values below -1 are meaningless.
+        // Keep -1 as a client alias for the fixed local context size; the HTTP
+        // builder translates it to a positive window. 0 means "disabled".
         if let Some(n) = self.dry_penalty_last_n {
             if n < -1 {
                 return Err("dry_penalty_last_n must be -1 (whole context), 0, or positive".into());
@@ -184,7 +189,31 @@ impl OcrOptions {
     }
 }
 
-/// How assembled OCR markdown is laid out on disk. Kept out of `OcrOptions`
+/// Application-side representation of model output. This never changes the prompt.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum ResultFormat {
+    /// Clean layout metadata and preserve headings and tables.
+    #[default]
+    Markdown,
+    /// Clean layout metadata and render headings/tables as ordinary text.
+    Text,
+    /// Preserve the model response exactly, including layout and page markers.
+    Raw,
+}
+
+/// Parse a CLI/GUI result format (case-insensitive). Unknown values are errors.
+pub fn parse_result_format(s: &str) -> crate::Res<ResultFormat> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "markdown" => Ok(ResultFormat::Markdown),
+        "text" => Ok(ResultFormat::Text),
+        "raw" => Ok(ResultFormat::Raw),
+        other => {
+            Err(format!("unknown result format \"{other}\" (expected markdown|text|raw)").into())
+        }
+    }
+}
+
+/// How assembled OCR output is laid out on disk. Kept out of `OcrOptions`
 /// (the loop-driving struct stays free of an output-dir concept); it only steers
 /// the shared `write_markdown_output` helper a caller invokes afterwards. Clap-free:
 /// the bin crate has its own value-enum and the GUI passes a string that
@@ -214,15 +243,16 @@ pub fn parse_output_mode(s: &str) -> crate::Res<OutputMode> {
     }
 }
 
-/// The result of OCR'ing one input: the combined page-delimited markdown, the
-/// per-page texts (real 1-based page number + trimmed markdown), and, when
+/// The result of OCR'ing one input: the combined output in the selected format,
+/// per-page texts (real 1-based page number + converted text), and, when
 /// `keep_images` is set, the directory the page PNGs were kept in. Carrying the
 /// per-page texts lets a caller write per-page files (`write_markdown_output`)
 /// without re-splitting the combined string on its `<!-- page N -->` delimiters.
 #[derive(Clone, Debug)]
 pub struct OcrOutput {
-    /// All pages joined with `<!-- page N -->` delimiters, leading whitespace
-    /// trimmed. This is what `{stem}.md` (single/both) holds.
+    /// Markdown uses `<!-- page N -->` delimiters; text uses form-feed page
+    /// separators; raw concatenates unmodified responses without added markup.
+    /// The legacy write helper saves this content under the caller's chosen path.
     pub combined: String,
     /// One `(page, text)` per processed page, in order. `page` is the real
     /// 1-based page number (accounts for `--pages` offsets).

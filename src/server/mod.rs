@@ -9,6 +9,9 @@ mod tests;
 pub use local::Server;
 pub use remote::RemoteEndpoint;
 
+/// Fixed context size for the local llama-server and whole-context DRY scans.
+pub const LOCAL_CONTEXT_SIZE: i32 = 32768;
+
 // First model load (incl. mmproj) can be slow; give it room.
 pub(crate) const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -109,16 +112,18 @@ pub trait ImageOcr {
 /// vLLM/SGLang endpoint never sees the extra fields). Shared by the streaming
 /// and non-streaming request builders (repo rule: one helper, both paths).
 ///
-/// `dry_multiplier` enables llama.cpp's DRY sampler, the closest analog of the
-/// sliding-window no-repeat-ngram logits processor the upstream Python wrapper
-/// uses for loop prevention (that processor doesn't ship in the GGUF). When set,
+/// `dry_multiplier` enables llama.cpp's DRY sampler. This is a distinct mechanism
+/// from upstream's no-repeat-ngram logits processor. When set,
 /// `dry_allowed_length` defaults to 4 (raised from the server default 2): OCR
 /// output legitimately repeats short in-line runs (table separators, repeated
 /// units), while runaway loops repeat far longer sequences, so 4 keeps the
 /// loop-killing power at zero cost to real document structure. `dry_allowed_length`
 /// and `dry_penalty_last_n` are now opt-in overrides (the GUI "anti-loop / dense
 /// page" toggle drops the allowed length to 2 and sets `dry_penalty_last_n` to -1
-/// = whole context, matching the community working command for dense pages); both
+/// = whole context, matching the community working command for dense pages). The
+/// legacy client alias -1 is translated to `LOCAL_CONTEXT_SIZE` on the wire:
+/// llama-server's HTTP API requires a nonnegative window, and the local context
+/// is fixed to that size. Both overrides
 /// are inert in llama.cpp unless DRY is enabled, so they are only sent when
 /// `dry_multiplier` is also set. The sequence breakers (which include `\n`,
 /// protecting row-by-row tables) stay at server defaults. `dry_base` (growth rate
@@ -144,6 +149,7 @@ pub(crate) fn apply_sampling(
             body["dry_base"] = serde_json::json!(db);
         }
         if let Some(n) = dry_penalty_last_n {
+            let n = if n == -1 { LOCAL_CONTEXT_SIZE } else { n };
             body["dry_penalty_last_n"] = serde_json::json!(n);
         }
     }

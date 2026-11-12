@@ -8,6 +8,7 @@ import { formatEpoch } from "./paths.js";
 import { applyPreset, markCachedQuants, setGgufPath, ENGINE_PRESETS } from "./model.js";
 import {
   renderEffectiveSummary,
+  applyOptionVisibility,
   applyPageSelectionVisibility,
   numOr,
   floatOrNull,
@@ -31,6 +32,53 @@ const tr = (window.unlocrI18n && window.unlocrI18n.t) || ((k) => k);
 // other's delta on write.
 let saveChain = Promise.resolve();
 
+const LOCAL_FIELDS = ["defaultQuant", "llamaBin", "modelFile", "mmprojFile", "visionMode", "imageMaxTokens", "chatTemplate",
+  "repetitionProfile", "repeatPenalty", "dryMultiplier", "dryBase", "dryAllowedLength", "dryPenaltyLastN", "antiLoop"];
+const REMOTE_FIELDS = ["remoteBaseUrl", "remoteModel"];
+const SHARED_PROFILE_FIELDS = ["temperature", "defaultMaxTokens", "defaultPrompt"];
+const SETTINGS_MIRRORS = { mode: "setMode", defaultQuant: "setQuant", defaultDpi: "setDpi",
+  defaultMaxTokens: "setMaxTokens", defaultPrompt: "setPrompt", remoteBaseUrl: "setRemoteUrl",
+  remoteModel: "setRemoteModel", llamaBin: "setLlamaBin" };
+
+export function syncSettingsMirrors(s, keys) {
+  keys.forEach((key) => { if (SETTINGS_MIRRORS[key]) setVal(SETTINGS_MIRRORS[key], s[key] ?? ""); });
+}
+
+/** Restore only the connection profile, clearing nullable overrides as well. */
+export function applyConnectionProfile(s) {
+  const fields = [...(s.mode === "remote" ? REMOTE_FIELDS : LOCAL_FIELDS), ...SHARED_PROFILE_FIELDS];
+  SYNCED_FIELDS.filter(([, key]) => fields.includes(key)).forEach(([id, key]) => setVal(id, s[key] ?? ""));
+  setVal("optPrompt", s.defaultPrompt ?? "");
+  if (s.mode !== "remote") {
+    setVal("setLlamaBin", s.llamaBin ?? "");
+    setGgufPath("modelFilePath", s.modelFile);
+    setGgufPath("mmprojFilePath", s.mmprojFile);
+    const antiLoop = document.getElementById("optAntiLoop");
+    if (antiLoop) antiLoop.checked = !!s.antiLoop;
+  }
+  syncSettingsMirrors(s, ["mode", ...fields]);
+  applyOptionVisibility();
+  renderEffectiveSummary();
+}
+
+/** All writers use this merge so a local edit cannot overwrite the remote
+ * profile (or vice versa). Flat fields remain the active-control wire contract. */
+export function mergeSettingsPatch(base, overrides) {
+  const localConfig = { ...Object.fromEntries([...LOCAL_FIELDS, ...SHARED_PROFILE_FIELDS].map((k) => [k, base[k]])), ...base.localConfig };
+  const remoteConfig = { ...Object.fromEntries([...REMOTE_FIELDS, ...SHARED_PROFILE_FIELDS].map((k) => [k, base[k]])), ...base.remoteConfig };
+  const mode = overrides.mode ?? base.mode ?? "local";
+  for (const [key, val] of Object.entries(overrides)) {
+    if (LOCAL_FIELDS.includes(key)) localConfig[key] = val;
+    if (REMOTE_FIELDS.includes(key)) remoteConfig[key] = val;
+    if (SHARED_PROFILE_FIELDS.includes(key)) (mode === "remote" ? remoteConfig : localConfig)[key] = val;
+  }
+  const active = mode === "remote" ? remoteConfig : localConfig;
+  return { ...base, ...active, ...overrides, localConfig, remoteConfig,
+    mode, enginePreset: mode === "remote" ? "custom" : "llamacpp",
+    configurationVersion: 2, stockModelProfile: "atomicchat/unlimited-ocr-2", stockModelProfileVersion: 2,
+    compatibilityStatus: localConfig.modelFile || localConfig.mmprojFile ? "custom-unverified" : "stock-v2" };
+}
+
 /** Fetch the current settings row, merge in `buildOverrides(base)`, and persist
  *  the result. Always refetches `base` fresh (never a cached/stale snapshot) so
  *  every settings-writing surface (Settings pane, Quick Settings, Workspace
@@ -46,8 +94,9 @@ export function patchSettings(t, buildOverrides, errLabel) {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(`[settings] ${errLabel} refetch failed`, err);
+      return { ok: false, error: err };
     }
-    const newSettings = { ...base, ...buildOverrides(base) };
+    const newSettings = mergeSettingsPatch(base, buildOverrides(base));
     try {
       await t.core.invoke("save_settings", { newSettings });
       return { ok: true, settings: newSettings };
@@ -68,7 +117,7 @@ export function patchSettings(t, buildOverrides, errLabel) {
 }
 
 // Workspace/Settings controls that mirror a Settings field 1:1 via a plain
-// `.value` assignment (numeric/text fields are parsed back out at save time in
+// `.value` assignment (numeric/text fields are parsed on the change event in
 // wireAutoSaveEngineOptions' save(), not here). Single source of truth for both
 // the restore-on-load loop below and AUTO_SAVE_CHANGE_IDS, so a new control only
 // needs one entry instead of two independently-maintained lists.
@@ -77,6 +126,9 @@ const SYNCED_FIELDS = [
   ["optDpi", "defaultDpi"],
   ["optMaxTokens", "defaultMaxTokens"],
   ["optImageMaxTokens", "imageMaxTokens"],
+  ["optVisionMode", "visionMode"],
+  ["optRepetitionProfile", "repetitionProfile"],
+  ["optResultFormat", "resultFormat"],
   ["optChatTemplate", "chatTemplate"],
   ["optTemperature", "temperature"],
   ["optRepeatPenalty", "repeatPenalty"],
@@ -113,10 +165,10 @@ export const QUICK_SETTINGS_FIELDS = [
  *  provider mode, remote fields) so a user's saved defaults seed each session. */
 export function applySettingsToControls(s) {
   if (!s) return;
-  // Settings-pane-only fields (not in SYNCED_FIELDS / AUTO_SAVE_CHANGE_IDS).
+  // Prompt and credentials are restored outside the 1:1 option-field list.
   setVal("optPrompt", s.defaultPrompt);
   setVal("remoteKey", s.remoteApiKey);
-  SYNCED_FIELDS.forEach(([id, key]) => setVal(id, s[key]));
+  SYNCED_FIELDS.forEach(([id, key]) => setVal(id, s[key] ?? ""));
   const keepImagesEl = document.getElementById("optKeepImages");
   if (keepImagesEl && s.keepImages != null) keepImagesEl.checked = !!s.keepImages;
   // Anti-loop toggle: a checkbox, so restored outside the setVal (.value) loop.
@@ -130,18 +182,15 @@ export function applySettingsToControls(s) {
   // Custom GGUF paths: <span> dataset stores, not <input>.value.
   setGgufPath("modelFilePath", s.modelFile);
   setGgufPath("mmprojFilePath", s.mmprojFile);
-  // Select the exact saved preset (engine_preset), not a lossy mode-based guess:
-  // mode only distinguishes local/remote, but there are 5 presets (llamacpp/gpu/
-  // vllm/sglang/custom), 3 of which are "remote". A pre-migration row has no
-  // enginePreset value (or a stale/corrupt one); fall back to the old
-  // mode-based guess rather than assign a value with no matching <option>
-  // (which HTML resolves to an unselected dropdown).
+  // Old engine-specific presets are migrated to custom by the backend. Keep a
+  // mode-based fallback for partial rows rather than unselecting the dropdown.
   const sel = document.getElementById("enginePreset");
   if (sel) {
     const validPreset = s.enginePreset && Object.prototype.hasOwnProperty.call(ENGINE_PRESETS, s.enginePreset);
     sel.value = validPreset ? s.enginePreset : ((s.mode || "local") === "remote" ? "custom" : "llamacpp");
     applyPreset(sel.value);
   }
+  applyOptionVisibility();
 }
 
 /** Wire the Settings panel: load persisted settings into the form on startup and
@@ -183,10 +232,22 @@ export async function wireSettings(onSaved) {
     if (typeof onSaved === "function") onSaved(current);
   }
 
+  let modePreview = Promise.resolve();
+  get(ids.mode)?.addEventListener("change", () => {
+    const mode = get(ids.mode).value;
+    modePreview = (async () => {
+      const base = await t.core.invoke("get_settings");
+      if (get(ids.mode).value !== mode) return;
+      const selected = mergeSettingsPatch(base, { mode });
+      ["defaultMaxTokens", "defaultPrompt"].forEach((key) => setVal(ids[key], selected[key] ?? ""));
+    })().catch((err) => console.error("[settings] profile preview failed", err));
+  });
+
   const saveBtn = document.getElementById("settingsSave");
   const saved = document.getElementById("settingsSaved");
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
+      await modePreview;
       // Like numOr() but allows 0 (idle-unload uses 0 to mean "never").
       const numOrZero = (id, fallback) => {
         const v = parseInt((get(id) && get(id).value) || "", 10);
@@ -215,7 +276,17 @@ export async function wireSettings(onSaved) {
         "settings save"
       );
       if (result.ok) {
-        applySettingsToControls(result.settings);
+        const switched = get("enginePreset")?.value !== result.settings.enginePreset;
+        // This pane owns only `ids`: restoring all workspace options here would
+        // discard unrelated edits made while this save was in flight.
+        const mirrors = { mode: "enginePreset", defaultQuant: "optQuant", remoteBaseUrl: "remoteUrl",
+          remoteApiKey: "remoteKey", remoteModel: "remoteModel", defaultDpi: "optDpi",
+          defaultMaxTokens: "optMaxTokens", defaultPrompt: "optPrompt" };
+        Object.entries(mirrors).forEach(([key, id]) => setVal(id,
+          key === "mode" ? result.settings.enginePreset : result.settings[key]));
+        if (switched) applyConnectionProfile(result.settings);
+        applyPreset(result.settings.enginePreset);
+        applyOptionVisibility();
         renderEffectiveSummary();
         if (typeof onSaved === "function") onSaved(result.settings);
         if (saved) {
@@ -243,6 +314,7 @@ export async function wireSettings(onSaved) {
 // Workspace's engine bar + Advanced panel exposes.
 const AUTO_SAVE_CHANGE_IDS = [
   ...SYNCED_FIELDS.map(([id]) => id),
+  "optPrompt",
   "optKeepImages",
   "optAntiLoop",
   "enginePreset",
@@ -262,7 +334,7 @@ const AUTO_SAVE_CHANGE_IDS = [
  *  wire-time and only ever refreshed it from its OWN saves, so a save from the
  *  Settings pane or Quick Settings went unnoticed and a later Workspace edit
  *  would silently revert it. Fields this function does not own (remoteApiKey,
- *  llamaBin, defaultPrompt, idleUnloadMinutes -- all Settings-pane-only) ride
+ *  llamaBin, idleUnloadMinutes -- all Settings-pane-only) ride
  *  through unchanged via that fresh base.
  *
  *  Call once, after wireSettings() has finished restoring the controls, so
@@ -283,48 +355,42 @@ export function wireAutoSaveEngineOptions() {
     return p && p.trim() ? p : "";
   };
 
-  async function save() {
-    await patchSettings(
+  async function save(event) {
+    const id = event.currentTarget.id;
+    const key = SYNCED_FIELDS.find(([controlId]) => controlId === id)?.[1]
+      || { optPrompt: "defaultPrompt", optKeepImages: "keepImages", optAntiLoop: "antiLoop",
+        modelFilePath: "modelFile", mmprojFilePath: "mmprojFile" }[id];
+    // Capture the edited control now; queued saves must never read a later
+    // connection's form, nor write unrelated stale fields from another surface.
+    const preset = get("enginePreset")?.value || "llamacpp";
+    const mode = (ENGINE_PRESETS[preset] || ENGINE_PRESETS.llamacpp).mode;
+    const el = get(id);
+    let captured = el?.value ?? "";
+    if (["defaultDpi", "defaultMaxTokens"].includes(key)) captured = numOr(el, key === "defaultDpi" ? 144 : 8000);
+    else if (["imageMaxTokens", "dryAllowedLength", "pageFrom", "pageTo"].includes(key)) captured = numOr(el, null);
+    else if (["temperature", "dryMultiplier"].includes(key)) captured = floatOrNullMin0(el);
+    else if (["repeatPenalty", "dryBase"].includes(key)) captured = floatOrNull(el);
+    else if (key === "dryPenaltyLastN") captured = intMinNeg1(el, null);
+    else if (["antiLoop", "keepImages"].includes(key)) captured = !!el?.checked;
+    else if (["modelFile", "mmprojFile"].includes(key)) captured = pickedGguf(id);
+    const result = await patchSettings(
       t,
-      (base) => {
-        const presetEl = get("enginePreset");
-        const preset = (presetEl && presetEl.value) || "llamacpp";
-        const mode = (ENGINE_PRESETS[preset] || ENGINE_PRESETS.llamacpp).mode;
-        return {
-          mode,
-          enginePreset: preset,
-          defaultQuant: (get("optQuant") && get("optQuant").value) || base.defaultQuant,
-          defaultDpi: numOr(get("optDpi"), base.defaultDpi),
-          defaultMaxTokens: numOr(get("optMaxTokens"), base.defaultMaxTokens),
-          remoteBaseUrl: (get("remoteUrl") && get("remoteUrl").value) || base.remoteBaseUrl,
-          remoteModel: (get("remoteModel") && get("remoteModel").value) || base.remoteModel,
-          imageMaxTokens: numOr(get("optImageMaxTokens"), null),
-          chatTemplate: (get("optChatTemplate") && get("optChatTemplate").value) || "",
-          temperature: floatOrNullMin0(get("optTemperature")),
-          repeatPenalty: floatOrNull(get("optRepeatPenalty")),
-          dryMultiplier: floatOrNullMin0(get("optDryMultiplier")),
-          dryBase: floatOrNull(get("optDryBase")),
-          // Persist the RAW override fields (null when blank), not the anti-loop
-          // fallback: readRunOptions re-derives 2/-1 from the toggle at run time.
-          dryAllowedLength: numOr(get("optDryAllowedLength"), null),
-          dryPenaltyLastN: intMinNeg1(get("optDryPenaltyLastN"), null),
-          antiLoop: !!(get("optAntiLoop") && get("optAntiLoop").checked),
-          keepImages: !!(get("optKeepImages") && get("optKeepImages").checked),
-          outputMode: (get("optOutputMode") && get("optOutputMode").value) || "single",
-          pagesMode: (get("optPagesMode") && get("optPagesMode").value) || "all",
-          pageFrom: numOr(get("optPageFrom"), null),
-          pageTo: numOr(get("optPageTo"), null),
-          modelFile: pickedGguf("modelFilePath"),
-          mmprojFile: pickedGguf("mmprojFilePath"),
-        };
-      },
+      () => ({ mode, [key]: captured }),
       "auto-save"
     );
+    if (result.ok) syncSettingsMirrors(result.settings, [key]);
   }
 
   AUTO_SAVE_CHANGE_IDS.forEach((id) => {
     const el = get(id);
-    if (el) el.addEventListener("change", save);
+    if (!el) return;
+    if (id !== "enginePreset") el.addEventListener("change", save);
+    else el.addEventListener("change", async () => {
+      const mode = el.value === "custom" ? "remote" : "local";
+      const result = await patchSettings(t, () => ({ mode }), "connection switch");
+      if (!result.ok || (el.value === "custom" ? "remote" : "local") !== mode) return;
+      applyConnectionProfile(result.settings);
+    });
   });
   // Custom-GGUF pickers aren't native <input>s (dialog.open() + span dataset
   // write); model.js's setPath dispatches this DOM CustomEvent on pick/clear

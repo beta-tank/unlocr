@@ -106,9 +106,9 @@ fn run() -> Res<()> {
     // pages. An explicit --repeat-penalty wins; remote/--gpu (full-precision
     // vLLM) is left untouched since it does not exhibit the quant loop.
     args.repeat_penalty = args.repeat_penalty.or(Some(1.3));
-    // Same gating for the DRY sampler: every local GGUF (any quant) gets 1.0 by
-    // default because the loop-preventing ngram processor the upstream Python
-    // wrapper relies on does not ship in the GGUF; DRY is llama.cpp's analog.
+    // Retain the current local DRY profile pending v2 quality comparison. DRY
+    // penalizes repeated sequences but is not equivalent to the upstream
+    // no-repeat n-gram processor.
     // An explicit --dry-multiplier (including 0 = off) wins. --dry-base has no
     // injected default (opt-in only, server default 1.75 applies when unset).
     args.dry_multiplier = args.dry_multiplier.or(Some(1.0));

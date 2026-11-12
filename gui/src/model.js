@@ -1,10 +1,9 @@
-// Model bar + engine presets: the titlebar Local/Remote badge, the model status
-// fan-out (Run gate + badge + bar), backend presets (llamacpp local vs remote
-// vllm/sglang/custom), the Load/Unload buttons, app-lifetime load-progress
-// listeners, and the quant tier labels / cached markers.
+// Managed local model / editable remote connection, applied model status,
+// load progress, and metadata-driven quant download labels.
 
 import { requireTauri } from "./tauri.js";
 import { showToast, removeToast } from "./toasts.js";
+import { acceptModelStatus, readLoadOptions, renderEffectiveSummary } from "./options.js";
 
 // EH-0013 bite 2: i18n hook. Named `tr` -- `t` is the Tauri handle in every fn.
 const tr = (window.unlocrI18n && window.unlocrI18n.t) || ((k) => k);
@@ -14,6 +13,9 @@ const tr = (window.unlocrI18n && window.unlocrI18n.t) || ((k) => k);
 // live locale switch (which changes tr("model.reload") under the button) cannot
 // make it relabel a loaded model as "Load model".
 let modelLoaded = false;
+let lastModelStatus = null;
+let labelRevision = 0;
+let statusRevision = 0;
 
 // True only while a load is in flight (set on Load click, cleared in its finally).
 // The ocr://progress / status / server-ready listeners are gated on this so a
@@ -82,42 +84,48 @@ export function updateModeBadge(status) {
   const dotClass = !loaded ? "is-off" : mode === "remote" ? "is-remote" : "is-loaded";
   const fallback = mode === "remote" ? tr("model.remote") : tr("model.local");
   const label = !loaded ? tr("status.noModel") : (status && status.label) || fallback;
-  badge.innerHTML = '<span class="titlebar__mode-dot ' + dotClass + '"></span>' + label;
+  const dot = document.createElement("span");
+  dot.className = "titlebar__mode-dot " + dotClass;
+  badge.replaceChildren(dot, document.createTextNode(label));
 }
 
 /** Fetch model_status and fan it out: the Run gate (ui), the titlebar badge, and
  *  the model bar (status text + Load/Unload enablement). Called on startup and
  *  after every load/unload. Fail-soft outside the webview. */
 export async function refreshModelStatus(ui) {
+  const revision = ++statusRevision;
   let t;
   try {
     t = requireTauri();
   } catch (err) {
     return;
   }
-  let status = { loaded: false, mode: "", label: "" };
+  let status;
   try {
     status = await t.core.invoke("model_status");
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[model] status failed", err);
+    return; // Preserve the last known snapshot and Run gate after a failed poll.
   }
+  if (revision !== statusRevision || !status || typeof status.loaded !== "boolean") return;
+  lastModelStatus = status;
+  acceptModelStatus(status);
   if (ui && typeof ui.applyModelStatus === "function") ui.applyModelStatus(status);
   updateModeBadge(status);
-  const loadBtn = document.getElementById("loadModelBtn");
   const unloadBtn = document.getElementById("unloadModelBtn");
   const statusText = document.getElementById("modelStatusText");
   modelLoaded = !!status.loaded;
   if (unloadBtn) unloadBtn.disabled = !status.loaded;
-  if (loadBtn) loadBtn.textContent = status.loaded ? tr("model.reload") : tr("model.load");
   if (statusText) {
     statusText.textContent = modelLoadError !== null
       ? tr("model.loadFailed", { error: modelLoadError })
-      : status.loaded ? tr("model.loadedLabel", { label: status.label }) : tr("model.noModelLoaded");
+      : status.loaded ? tr(status.mode === "remote" ? "model.connectedLabel" : "model.loadedLabel", { label: status.label }) : tr("model.noModelLoaded");
   }
   // Upgrade the unloaded "Load model" label to "Download & load model" when the
   // selected local quant is not yet cached (best-effort; loaded state is left).
   updateLoadLabel();
+  if (status.loaded && status.mode === "local") refreshProjectorInfo(t);
   // Signal load/unload/startup completion so the file-rail pipeline pane can
   // re-run preflight (a download may have added the GGUF). DOM event is the seam
   // (this fn has no `rail`), same pattern as the GGUF picker's unlocr:gguf-changed.
@@ -129,10 +137,17 @@ export async function refreshModelStatus(ui) {
  *  and a custom GGUF override never download a quant, so they stay "Load model".
  *  Best-effort: silent outside the webview or if list_local_models fails. */
 async function updateLoadLabel() {
+  const revision = ++labelRevision;
   const loadBtn = document.getElementById("loadModelBtn");
-  if (!loadBtn || modelLoaded) return; // a model is loaded: leave the "Reload" label
+  if (!loadBtn) return;
+  const unloadBtn = document.getElementById("unloadModelBtn");
+  if (unloadBtn) unloadBtn.textContent = tr(modelLoaded && lastModelStatus?.mode === "remote" ? "model.disconnect" : "model.unload");
   if (activeEngineMode() !== "local") {
-    loadBtn.textContent = tr("model.load");
+    loadBtn.textContent = tr(modelLoaded && lastModelStatus?.mode === "remote" ? "model.reconnect" : "model.connect");
+    return;
+  }
+  if (modelLoaded) {
+    loadBtn.textContent = tr("model.reload");
     return;
   }
   if (pickedGguf("modelFilePath")) {
@@ -144,72 +159,44 @@ async function updateLoadLabel() {
   try {
     cached = await requireTauri().core.invoke("list_local_models");
   } catch (err) {
+    if (revision === labelRevision) loadBtn.textContent = tr("model.load");
     return;
   }
+  if (revision !== labelRevision) return;
   loadBtn.textContent = (cached || []).includes(quant)
     ? tr("model.load")
     : tr("model.downloadLoad");
 }
 
-// Backend presets. llamacpp = managed-local spawn (Quant control drives it, no
-// URL); vllm/sglang/custom are remote OpenAI-compatible endpoints. Non-custom
-// presets keep the URL/key/model fields hidden; vllm/sglang prefill #remoteUrl
-// with the backend's default port (base URL only -- the backend appends
-// /v1/chat/completions, so no /v1 suffix here). load_model reads mode + the
-// (possibly prefilled) #remoteUrl, so presets need no extra plumbing.
+// Connection choices never mutate the user's URL, key, or served model name.
 export const ENGINE_PRESETS = {
-  llamacpp: { mode: "local", url: null },
-  // Full (non-GGUF) Unlimited-OCR-2 on GPU: same remote path as vllm, but also
-  // prefills the served model name so the user does not have to know the repo id.
-  gpu: { mode: "remote", url: "http://127.0.0.1:8000", model: "baidu/Unlimited-OCR-2" },
-  // model: "" = clear the field (so a stale gpu name is not sent); user types their
-  // own served name. custom/llamacpp omit `model` entirely = leave the field as-is
-  // (preserves a value restored from saved settings).
-  vllm: { mode: "remote", url: "http://127.0.0.1:8000", model: "" },
-  sglang: { mode: "remote", url: "http://127.0.0.1:30000", model: "" },
-  custom: { mode: "remote", url: null },
+  llamacpp: { mode: "local" },
+  custom: { mode: "remote" },
 };
 
-/** Apply a backend preset: toggle the remote field visibility (editable only for
- *  Custom), prefill the URL for vllm/sglang, and hide the Quant control for any
- *  remote backend (quant only applies to the managed-local spawn). */
+/** Toggle connection fields and local-only model options. */
 export function applyPreset(name) {
   const p = ENGINE_PRESETS[name] || ENGINE_PRESETS.llamacpp;
   const remoteFields = document.getElementById("remoteFields");
-  if (remoteFields) remoteFields.hidden = name !== "custom";
+  if (remoteFields) remoteFields.hidden = p.mode !== "remote";
   // Custom-GGUF pickers apply only to the managed-local spawn (they replace the
   // download + quant naming); hide them for any remote backend.
   const localFields = document.getElementById("localFields");
   if (localFields) localFields.hidden = p.mode !== "local";
-  if (p.url) {
-    const url = document.getElementById("remoteUrl");
-    if (url) url.value = p.url;
-  }
-  // gpu prefills the served model name (vLLM needs it in the request body); vllm/
-  // sglang set "" to clear a stale gpu name; custom/llamacpp omit `model` so a
-  // saved value restored into the field is preserved (undefined = leave as-is).
-  if (p.model !== undefined) {
-    const modelEl = document.getElementById("remoteModel");
-    if (modelEl) modelEl.value = p.model;
-  }
   const quantEl = document.getElementById("optQuant");
   const quantField = quantEl && quantEl.closest(".opts__field");
   if (quantField) quantField.hidden = p.mode !== "local";
-  // Show the GPU prerequisites hint only for the GPU preset.
-  const gpuHint = document.getElementById("gpuHint");
-  if (gpuHint) gpuHint.hidden = name !== "gpu";
+  renderEffectiveSummary();
+  updateLoadLabel();
 }
 
-/** Wire the OCR engine backend preset dropdown. Changing it re-applies the preset
- *  (field visibility + URL prefill). The selected preset's mode is read by the
+/** Wire the connection dropdown. The selected preset's mode is read by the
  *  Load button to pick local vs remote. */
 export function wireEnginePreset() {
   const sel = document.getElementById("enginePreset");
   if (!sel) return;
   sel.addEventListener("change", () => {
     applyPreset(sel.value);
-    // Mode may have flipped local<->remote: refresh the download/load label.
-    updateLoadLabel();
   });
   applyPreset(sel.value);
 }
@@ -255,6 +242,7 @@ export function setGgufPath(spanId, path) {
   span.title = selected;
   const clearBtn = document.getElementById(spanId + "Clear");
   if (clearBtn) clearBtn.disabled = !selected;
+  renderEffectiveSummary();
 }
 
 /** Wire one GGUF file picker: clicking the button opens the native dialog
@@ -327,38 +315,20 @@ export function wireModelBar(ui) {
         if (statusText) statusText.textContent = tr("model.unavailableOutside");
         return;
       }
-      const mode = activeEngineMode();
-      const quantEl = document.getElementById("optQuant");
-      const urlEl = document.getElementById("remoteUrl");
-      const keyEl = document.getElementById("remoteKey");
-      const modelEl = document.getElementById("remoteModel");
-      // Startup-only DeepSeek-OCR knobs read at load time (they parameterize the
-      // llama-server spawn). Blank/invalid -> null so the backend omits the flag.
-      const imtEl = document.getElementById("optImageMaxTokens");
-      const ctEl = document.getElementById("optChatTemplate");
-      const imtVal = imtEl ? parseInt(imtEl.value || "", 10) : NaN;
+      const loadOptions = readLoadOptions();
+      ++statusRevision; // Ignore a status poll begun before this load request.
       loadBtn.disabled = true;
       if (unloadBtn) unloadBtn.disabled = true;
       modelLoadError = null;
       removeToast("load:error");
-      if (statusText) statusText.textContent = tr("model.loading");
+      if (statusText) statusText.textContent = tr(loadOptions.mode === "remote" ? "model.connecting" : "model.loading");
       loadingModel = true;
       try {
-        const status = await t.core.invoke("load_model", {
-          mode,
-          quant: quantEl ? quantEl.value : null,
-          baseUrl: urlEl ? urlEl.value : null,
-          apiKey: keyEl ? keyEl.value : null,
-          model: modelEl ? modelEl.value : null,
-          // Explicit llama-server override from Settings (#setLlamaBin). Empty =
-          // null so the backend auto-resolves (managed cached -> download -> PATH).
-          // A set path is flagged External in the preflight/pipeline provenance.
-          llamaBin: ((document.getElementById("setLlamaBin") || {}).value || "").trim() || null,
-          imageMaxTokens: Number.isFinite(imtVal) && imtVal > 0 ? imtVal : null,
-          chatTemplate: ctEl && ctEl.value ? ctEl.value : null,
-          modelFile: pickedGguf("modelFilePath"),
-          mmprojFile: pickedGguf("mmprojFilePath"),
-        });
+        const status = await t.core.invoke("load_model", loadOptions);
+        lastModelStatus = status;
+        modelLoaded = !!status.loaded;
+        if (unloadBtn) unloadBtn.disabled = !status.loaded;
+        acceptModelStatus(status, loadOptions);
         if (ui) ui.applyModelStatus(status);
         // Paint the badge + status text DIRECTLY from the known load result
         // instead of waiting on refreshModelStatus's model_status re-fetch (a
@@ -366,7 +336,7 @@ export function wireModelBar(ui) {
         // text on "server ready on :PORT"). loadingModel is dropped in finally
         // BEFORE that re-fetch, so those listeners cannot clobber this.
         updateModeBadge(status);
-        if (statusText) statusText.textContent = tr("model.loadedLabel", { label: status.label });
+        if (statusText) statusText.textContent = tr(status.mode === "remote" ? "model.connectedLabel" : "model.loadedLabel", { label: status.label });
       } catch (err) {
         modelLoadError = String(err);
         const message = tr("model.loadFailed", { error: modelLoadError });
@@ -401,12 +371,22 @@ export function wireModelBar(ui) {
       // refreshModelStatus lands "No model loaded". loadingModel is false here,
       // so the gated load listeners cannot overwrite this.
       loadingModel = false;
+      ++statusRevision;
       modelLoadError = null;
       removeToast("load:error");
       if (statusText) statusText.textContent = tr("model.stopping");
       updateModeBadge({ loaded: false, mode: "", label: "" });
       try {
-        await t.core.invoke("unload_model");
+        const status = await t.core.invoke("unload_model");
+        // The command result is authoritative even if the subsequent poll fails.
+        lastModelStatus = status;
+        modelLoaded = !!status.loaded;
+        acceptModelStatus(status);
+        if (ui) ui.applyModelStatus(status);
+        updateModeBadge(status);
+        unloadBtn.disabled = !status.loaded;
+        if (statusText) statusText.textContent = tr("model.noModelLoaded");
+        updateLoadLabel();
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error("[model] unload failed", err);
@@ -447,11 +427,11 @@ export function attachLoadListeners() {
   });
 }
 
-/** Format a quant's display label: "good (Q8_0)"-style when the backend
- *  supplies a best/good/less tier alias, else just the raw quant tag (the two
- *  quants with no CLI Quality alias). */
-export function quantTierLabel(name, tier) {
-  return tier ? tr("tier.format", { tier: tr("tier." + tier), quant: name }) : name;
+/** Metadata sizes are downloads, never estimates of runtime memory usage. */
+export function quantTierLabel(name, _tier, sizeBytes) {
+  const key = { Q8_0: "recommended", BF16: "full", "AD-Q6_K": "compact", "AD-Q5_K": "compact", "AD-Q4_K": "smallest" }[name];
+  const size = Number.isFinite(sizeBytes) ? " · " + (sizeBytes / 1e9).toFixed(2) + " GB (" + sizeBytes.toLocaleString("en-US") + " B)" : "";
+  return name + (key ? " · " + tr("quant." + key) : "") + size;
 }
 
 /** Rebuild the 3 quant `<select>`s (`#optQuant`, `#setQuant`, `#qsQuant`) from
@@ -482,12 +462,30 @@ export async function populateQuantSelects() {
     quants.forEach((q) => {
       const opt = document.createElement("option");
       opt.value = q.name;
-      const label = quantTierLabel(q.name, q.tier);
+      const label = quantTierLabel(q.name, q.tier, q.sizeBytes);
       opt.textContent = q.cached ? label + tr("model.cached") : label;
       sel.appendChild(opt);
     });
     sel.value = names.has(prevValue) ? prevValue : names.has("Q8_0") ? "Q8_0" : sel.value;
   });
+  await refreshProjectorInfo(t);
+}
+
+/** Shared projector size from AtomicChat's pinned b2cda9b HF tree metadata:
+ *  825,245,856 bytes. Presence is independent of the selected weight quant. */
+async function refreshProjectorInfo(t) {
+  const el = document.getElementById("projectorInfo");
+  if (!el) return;
+  el.removeAttribute("data-i18n");
+  try {
+    // Passive presence probe; list_cached_files would hash every multi-GB model.
+    const report = await t.core.invoke("preflight", { quant: document.getElementById("optQuant")?.value || "Q8_0" });
+    el.textContent = report.mmprojPresent
+      ? tr("quant.projectorCached")
+      : tr("quant.projectorDownload");
+  } catch {
+    el.textContent = tr("quant.projectorUnknown");
+  }
 }
 
 /** Alias kept for existing call sites (main.js, settings.js): a single

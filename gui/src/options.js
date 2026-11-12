@@ -1,7 +1,5 @@
-// Engine/options form (EH-0005): reads the run controls into the run_ocr payload,
-// reads the Pages selector, toggles the page-number inputs, and renders the
-// "effective values" summary next to Run. Pure DOM; the summary reads from the
-// same readRunOptions() the Run button uses so it can never drift from the payload.
+// Run controls and the applied load-time snapshot are deliberately separate:
+// editing a connection never changes the backend used by the next run.
 
 // Task preset -> the user prompt actually sent. Unlimited-OCR uses NO system prompt;
 // the backend wraps the image as `<PAGE>` + image + this task instruction.
@@ -22,6 +20,108 @@ export const TASK_PROMPTS = {
 // readPageSelection(). TASK_PROMPTS above are model-instruction payloads and stay
 // canonical English on purpose (they are sent to the model, not shown to the user).
 const tr = (window.unlocrI18n && window.unlocrI18n.t) || ((k) => k);
+const control = (id) => document.getElementById(id);
+const value = (id) => (control(id)?.value || "").trim();
+let modelStatus = null;
+let acceptedLoadOptions = null;
+
+/** Shared load payload: only expert vision uses the numeric override; stock
+ *  Unlimited-OCR-2 always uses its embedded template. No connection prefills. */
+export function readLoadOptions() {
+  const mode = value("enginePreset") === "custom" ? "remote" : "local";
+  const path = (id) => control(id)?.dataset?.path || null;
+  const modelFile = mode === "local" ? path("modelFilePath") : null;
+  const visionMode = mode === "local" ? value("optVisionMode") || "auto" : null;
+  return {
+    mode,
+    quant: mode === "local" ? value("optQuant") || "Q8_0" : null,
+    baseUrl: mode === "remote" ? value("remoteUrl") || null : null,
+    apiKey: mode === "remote" ? value("remoteKey") || null : null,
+    model: mode === "remote" ? value("remoteModel") || null : null,
+    llamaBin: mode === "local" ? value("setLlamaBin") || null : null,
+    modelFile,
+    mmprojFile: mode === "local" ? path("mmprojFilePath") : null,
+    visionMode,
+    imageMaxTokens: visionMode === "base" ? 273
+      : visionMode === "expert" ? numOr(control("optImageMaxTokens"), null) : null,
+    chatTemplate: modelFile ? value("optChatTemplate") || null : null,
+  };
+}
+
+/** Called for successful loads and status refreshes. Unknown status is distinct
+ *  from unloaded: a failed poll must not fabricate a successful unload. */
+export function acceptModelStatus(status, loadOptions = null) {
+  if (!status || typeof status.loaded !== "boolean") return;
+  const wasLoaded = modelStatus?.loaded;
+  modelStatus = { ...status, effectiveConfig: status.effectiveConfig ? { ...status.effectiveConfig } : null };
+  if (!status.loaded) acceptedLoadOptions = null;
+  else if (loadOptions) acceptedLoadOptions = { ...loadOptions };
+  else if (!wasLoaded) acceptedLoadOptions = null;
+  renderEffectiveSummary();
+}
+
+/** Canonical display URL, matching Rust's public_endpoint_url. Never show keys. */
+export function publicEndpoint(raw) {
+  try {
+    const url = new URL(raw);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch { return ""; }
+}
+
+/** Compare only load-sensitive fields relevant to the selected backend. */
+export function hasPendingLoadChanges(selected, applied, accepted = null) {
+  if (!applied) return false;
+  if (selected.mode !== applied.mode) return true;
+  const same = (a, b) => (a ?? null) === (b ?? null);
+  if (selected.mode === "remote") {
+    return publicEndpoint(selected.baseUrl) !== publicEndpoint(applied.baseUrl)
+      || !same(selected.model, applied.model)
+      || !!(accepted && (!same(selected.apiKey, accepted.apiKey) || !same(selected.baseUrl, accepted.baseUrl)));
+  }
+  const custom = !!selected.modelFile;
+  return custom !== !applied.quant
+    || (custom ? !same(selected.modelFile, applied.modelFile) : selected.quant !== applied.quant)
+    || !same(selected.visionMode, applied.visionMode || "auto")
+    || !same(selected.imageMaxTokens, applied.imageMaxTokens)
+    || !same(selected.chatTemplate, applied.chatTemplate)
+    || (Object.prototype.hasOwnProperty.call(applied, "mmprojOverride")
+      ? !same(selected.mmprojFile, applied.mmprojOverride)
+      : !!(selected.mmprojFile && !same(selected.mmprojFile, applied.mmprojFile)))
+    || (Object.prototype.hasOwnProperty.call(applied, "llamaBinOverride")
+      ? !same(selected.llamaBin, applied.llamaBinOverride)
+      : !!(accepted && !same(selected.llamaBin, accepted.llamaBin)))
+    || !!(accepted && !same(selected.mmprojFile, accepted.mmprojFile));
+}
+
+/** Settings restore can call this without generating autosave events. */
+export function applyOptionVisibility(skipDpiProfile = false) {
+  const selected = readLoadOptions();
+  const remote = selected.mode === "remote";
+  const hide = (id, hidden) => { if (control(id)) control(id).hidden = hidden; };
+  hide("visionField", remote);
+  hide("visionExpertField", remote || selected.visionMode !== "expert");
+  hide("templateExpertField", remote || !selected.modelFile);
+  hide("embeddedTemplate", remote || !!selected.modelFile);
+  if (control("optQuant")) control("optQuant").disabled = !!selected.modelFile;
+  // Run options follow the *loaded* backend even while another mode is selected.
+  const runRemote = modelStatus?.loaded ? modelStatus.mode === "remote" : remote;
+  hide("repetitionField", remote || runRemote);
+  hide("repetitionExpert", remote || runRemote || value("optRepetitionProfile") !== "manual");
+  const dpi = control("optDpi");
+  const profile = control("optDpiProfile");
+  if (!skipDpiProfile && profile && dpi) profile.value = ["144", "200", "300"].includes(dpi.value) ? dpi.value : "custom";
+}
+
+/** PDF rasterization does not apply when every selected input is an image. */
+export function applyInputPaths(paths) {
+  const imageOnly = paths.length > 0 && paths.every((p) => /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(p));
+  ["optDpi", "optDpiProfile"].forEach((id) => { if (control(id)) control(id).disabled = imageOnly; });
+  if (control("dpiImageHint")) control("dpiImageHint").hidden = !imageOnly;
+}
 
 /** Parse a positive integer from a control, falling back when blank/invalid.
  *  Shared by readRunOptions() and settings.js's auto-save (so both agree on
@@ -44,7 +144,7 @@ export const floatOrNullMin0 = (el) => {
   return Number.isFinite(v) && v >= 0 ? v : null;
 };
 
-/** Integer >= -1 (dry_penalty_last_n: -1 = whole context, 0 = off, >0 = window),
+/** Integer >= -1 (-1 is a client alias for the managed context, 0 = off, >0 = window),
  *  else the fallback. The backend's OcrOptions::validate rejects < -1. */
 export const intMinNeg1 = (el, fallback) => {
   const v = parseInt((el && el.value) || "", 10);
@@ -95,6 +195,9 @@ export function readRunOptions() {
   };
 
   const pages = readPageSelection();
+  const remote = modelStatus?.loaded ? modelStatus.mode === "remote" : value("enginePreset") === "custom";
+  const repetitionProfile = remote ? "default" : value("optRepetitionProfile") || "default";
+  const manual = repetitionProfile === "manual";
 
   return {
     quant: (quantEl && quantEl.value) || "Q8_0",
@@ -105,17 +208,20 @@ export function readRunOptions() {
     // 0 is the meaningful default (deterministic OCR), so use the DRY-style
     // "0 is real" parse rather than repeatPenalty's "blank/0 -> null".
     temperature: floatOrNullMin0(temperatureEl),
-    repeatPenalty: floatOrNull(repeatPenaltyEl),
-    dryMultiplier: floatOrNullMin0(dryMultiplierEl),
+    repetitionProfile,
+    resultFormat: value("optResultFormat") || "markdown",
+    repeatPenalty: manual ? floatOrNull(repeatPenaltyEl) : null,
+    dryMultiplier: manual ? floatOrNullMin0(dryMultiplierEl) : null,
     // No "0 = off" meaning for a DRY base; blank/invalid/0 -> null (server default).
-    dryBase: floatOrNull(dryBaseEl),
+    dryBase: manual ? floatOrNull(dryBaseEl) : null,
     // Anti-loop preset (dense/math pages): an explicit field wins; else the toggle
-    // supplies the community working value (allowed length 2, scan window -1 = whole
-    // context); else null so the backend uses its default. These only reach the wire
+    // supplies allowed length 2 and the legacy whole-context alias -1 (Rust resolves
+    // it to the positive managed context size before HTTP); else server default.
+    // These only reach the wire
     // when DRY is active (local GGUF), which the backend guarantees via its 1.0
     // dry_multiplier default; remote endpoints drop them.
-    dryAllowedLength: numOr(dryAllowedLengthEl, antiLoopEl && antiLoopEl.checked ? 2 : null),
-    dryPenaltyLastN: intMinNeg1(dryPenaltyLastNEl, antiLoopEl && antiLoopEl.checked ? -1 : null),
+    dryAllowedLength: manual ? numOr(dryAllowedLengthEl, antiLoopEl && antiLoopEl.checked ? 2 : null) : null,
+    dryPenaltyLastN: manual ? intMinNeg1(dryPenaltyLastNEl, antiLoopEl && antiLoopEl.checked ? -1 : null) : null,
     // 1-based inclusive page range; both null = all pages. The backend validates
     // first>=1 and last>=first (a direct invoke bypasses the form min= clamp).
     firstPage: pages.firstPage,
@@ -180,15 +286,44 @@ export function wirePageSelection() {
   // #runOpts input/change listeners wired in DOMContentLoaded.
   modeEl.addEventListener("change", applyPageSelectionVisibility);
   applyPageSelectionVisibility();
+  const refresh = () => { applyOptionVisibility(); renderEffectiveSummary(); };
+  ["enginePreset", "remoteUrl", "remoteModel", "remoteKey", "setLlamaBin"].forEach((id) => {
+    control(id)?.addEventListener("input", refresh);
+    control(id)?.addEventListener("change", refresh);
+  });
+  document.addEventListener("unlocr:gguf-changed", refresh);
+  control("optDpiProfile")?.addEventListener("change", () => {
+    const selected = value("optDpiProfile");
+    if (selected === "custom") return;
+    setVal("optDpi", selected);
+    // Use the existing autosave contract for the persisted numeric DPI.
+    control("optDpi")?.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const syncInputs = () => {
+    const queued = Array.from(document.querySelectorAll("#fileList .file-row__path"), (el) => el.textContent);
+    applyInputPaths(queued.length ? queued : value("pdfPath") ? [value("pdfPath")] : []);
+    renderEffectiveSummary();
+  };
+  control("pdfPath")?.addEventListener("input", syncInputs);
+  control("pdfPath")?.addEventListener("change", syncInputs);
+  // Native imports/queue selection assign .value directly; the file rail is
+  // their observable selection seam (also covers mixed PDF/image batches).
+  if (control("fileList") && typeof MutationObserver !== "undefined") {
+    new MutationObserver(syncInputs).observe(control("fileList"), { childList: true, subtree: true });
+  }
+  document.addEventListener("unlocr:input-selected", (event) => {
+    applyInputPaths(event.detail?.paths || []);
+    renderEffectiveSummary();
+  });
+  syncInputs();
 }
 
-/** Render the "effective values" summary (EH-0005 bite 2) next to Run so the user
- *  sees what the next run will send before clicking. Reads from the same
- *  readRunOptions() the Run button uses, so it can never drift from the payload.
- *  The prompt is summarized (not shown verbatim) to keep the line scannable: the
- *  first sentence after any grounding tag, truncated. Empty/missing nodes fall
- *  back to the defaults so the summary is correct on first paint. */
-export function renderEffectiveSummary() {
+/** Applied model identity comes only from Rust; the next request's options come
+ *  from readRunOptions. Pending load edits never masquerade as applied values. */
+export function renderEffectiveSummary(event) {
+  // main.js also observes the profile select. Do not reset its new selection
+  // before the dedicated handler copies it into the persisted numeric DPI.
+  applyOptionVisibility(event?.target?.id === "optDpiProfile");
   const vals = document.getElementById("effectiveVals");
   if (!vals) return;
   const opts = readRunOptions();
@@ -208,16 +343,37 @@ export function renderEffectiveSummary() {
     else if (opts.lastPage == null) pagesNote = tr("eff.pagesToEnd", { from: f });
     else pagesNote = tr("eff.pageSingle", { n: f });
   }
-  const modeNote = opts.outputMode === "single" ? "" : tr("eff.output", { mode: opts.outputMode });
-  vals.textContent = tr("eff.summary", {
-    quant: opts.quant,
-    dpi: opts.dpi,
-    maxTokens: opts.maxTokens,
-    keepImages: tr(opts.keepImages ? "job.on" : "job.off"),
-    pages: pagesNote,
-    mode: modeNote,
-    prompt: shown + ellipsis,
-  });
+  const applied = modelStatus?.loaded ? modelStatus.effectiveConfig : null;
+  const selected = readLoadOptions();
+  const pending = !!applied && hasPendingLoadChanges(selected, applied, acceptedLoadOptions);
+  let loaded = tr(modelStatus?.loaded ? "eff.snapshotUnavailable" : modelStatus ? "eff.notLoaded" : "eff.statusUnknown");
+  if (applied) {
+    const identity = applied.mode === "remote"
+      ? [tr("engine.custom"), applied.model || tr("eff.serverModel"), publicEndpoint(applied.baseUrl)]
+      : [tr("engine.llamacpp"), applied.quant || applied.model || tr("eff.customModel"),
+        tr("eff.vision", { mode: tr("opts.vision." + (applied.visionMode || "auto")) }),
+        applied.imageMaxTokens == null ? "" : tr("eff.visionTokens", { n: applied.imageMaxTokens }),
+        applied.chatTemplate || (applied.quant ? tr("opts.embeddedTemplate") : tr("opts.chatModelDefault")),
+        applied.mmprojFile ? tr("eff.projector", { name: applied.mmprojFile.split(/[/\\]/).pop() }) : ""];
+    loaded = identity.filter(Boolean).join(" · ");
+  }
+  const run = [tr("eff.perPage"), tr("opts.format." + opts.resultFormat),
+    tr("eff.budget", { n: opts.maxTokens }), tr("eff.temperature", { n: opts.temperature ?? 0 }),
+    tr("eff.repetition", { profile: tr("opts.repetition." + opts.repetitionProfile) }),
+    control("optDpi")?.disabled ? tr("eff.imageInput") : tr("eff.dpi", { n: opts.dpi }),
+    tr("eff.keepImages", { state: tr(opts.keepImages ? "job.on" : "job.off") }),
+    tr("eff.files", { mode: opts.outputMode }),
+    tr("eff.prompt", { prompt: shown + ellipsis })];
+  if (opts.repetitionProfile === "manual") {
+    run.push(tr("eff.manual", { repeat: opts.repeatPenalty ?? 1.3, dry: opts.dryMultiplier ?? 1,
+      base: opts.dryBase ?? 1.75, length: opts.dryAllowedLength ?? 4, window: opts.dryPenaltyLastN ?? "default" }));
+  }
+  vals.textContent = loaded + "\n" + tr("eff.nextRun") + " " + run.join(" · ") + pagesNote;
+  const pendingEl = control("pendingModelChanges");
+  if (pendingEl) {
+    pendingEl.hidden = !pending;
+    pendingEl.textContent = tr(selected.mode === "remote" ? "eff.pendingRemote" : "eff.pendingLocal");
+  }
 }
 
 // EH-0013: re-render the effective-values summary on a locale switch so its

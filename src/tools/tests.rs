@@ -109,16 +109,14 @@ fn find_exe_missing_dir_is_none() {
     assert!(find_exe(&missing, "pandoc").is_none());
 }
 
-/// `downloadable()` exactly mirrors the pins compiled for this build (Windows: three;
-/// macOS: pandoc; Linux/other: none). Per-host, so each OS's CI asserts its own set.
+/// `downloadable()` exactly mirrors the compiled pins. Unit tests substitute a
+/// pandoc-only fixture on every OS; production platform pins are not used here.
 #[test]
 fn downloadable_matches_pins() {
     let got = downloadable();
     let want: Vec<&str> = PINS.iter().map(|t| t.name).collect();
     assert_eq!(got, want);
-    if cfg!(not(any(target_os = "windows", target_os = "macos"))) {
-        assert!(got.is_empty(), "Linux/other must not offer auto-download");
-    }
+    assert_eq!(got, vec!["pandoc"], "unit-test pin fixture changed");
 }
 
 /// A tool with no pin for this platform is refused BEFORE any network IO, with a

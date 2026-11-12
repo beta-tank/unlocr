@@ -4,6 +4,103 @@ use serde_json::json;
 use std::ffi::OsString;
 use std::path::Path;
 
+/// Direct adapter calls must not leak local knobs to a generic API, even when
+/// every manual override was supplied. Exercise real HTTP and both response paths.
+#[test]
+fn remote_http_strips_all_llama_sampling_in_both_paths() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    for streaming in [false, true] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ep = RemoteEndpoint {
+            base_url: format!("http://{}/", listener.local_addr().unwrap()),
+            api_key: Some("test-key".into()),
+            model: Some("served-name".into()),
+        };
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            let mut length = 0;
+            let mut headers = String::new();
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = n.trim().parse::<usize>().unwrap();
+                }
+                headers.push_str(&line.to_ascii_lowercase());
+            }
+            assert!(headers.starts_with("post /v1/chat/completions "));
+            assert!(headers.contains("authorization: bearer test-key"));
+            let mut bytes = vec![0; length];
+            reader.read_exact(&mut bytes).unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let mut keys: Vec<_> = body
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            keys.sort_unstable();
+            let expected = if streaming {
+                vec!["max_tokens", "messages", "model", "stream", "temperature"]
+            } else {
+                vec!["max_tokens", "messages", "model", "temperature"]
+            };
+            assert_eq!(keys, expected);
+            assert_eq!(body["model"], "served-name");
+            assert_eq!(body["max_tokens"], 64);
+            assert_eq!(body["temperature"], 0.25);
+            let response = if streaming {
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"
+            } else {
+                "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}"
+            };
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            )
+            .unwrap();
+        });
+        let result = if streaming {
+            ep.ocr_image_stream(
+                "Multi page parsing.",
+                "data:image/png;base64,AA==",
+                64,
+                Some(0.25),
+                Some(1.3),
+                Some(1.0),
+                Some(1.75),
+                Some(2),
+                Some(-1),
+                &mut |_| true,
+                &|| false,
+            )
+        } else {
+            ep.ocr_image(
+                "Multi page parsing.",
+                "data:image/png;base64,AA==",
+                64,
+                Some(0.25),
+                Some(1.3),
+                Some(1.0),
+                Some(1.75),
+                Some(2),
+                Some(-1),
+            )
+        };
+        assert_eq!(result.unwrap().text, "ok");
+        server.join().unwrap();
+    }
+}
+
 /// Simulate llama-server's disconnect cancellation: a pending request must close
 /// its socket (also during TTFT), then the same server must serve a fresh run.
 fn cancel_stream_and_reuse_server(send_token: bool) {
@@ -646,11 +743,11 @@ fn apply_sampling_sets_fields_only_when_set() {
     assert_eq!(body["dry_base"], json!(2.0f32));
 
     // Anti-loop preset: with DRY on, an explicit allowed-length of 2 and a
-    // penalty-last-n of -1 must both reach the wire (the dense-page toggle).
+    // penalty-last-n alias of -1 scans the fixed local context on the wire.
     let mut body = baseline.clone();
     apply_sampling(&mut body, None, Some(0.8), None, Some(2), Some(-1));
     assert_eq!(body["dry_allowed_length"], json!(2));
-    assert_eq!(body["dry_penalty_last_n"], json!(-1));
+    assert_eq!(body["dry_penalty_last_n"], json!(LOCAL_CONTEXT_SIZE));
 
     // The two anti-loop knobs are inert without DRY: dry_multiplier None must
     // drop dry_allowed_length AND dry_penalty_last_n even when supplied.
@@ -680,10 +777,142 @@ fn apply_sampling_sets_fields_only_when_set() {
     );
 }
 
-/// The DRY fields must reach the wire only when `dry_multiplier` is set (a
-/// remote endpoint that rejects llama.cpp-only fields must never see them).
-/// Stub HTTP server captures the request body, mirroring
-/// `remote_endpoint_injects_model_only_when_set`.
+#[test]
+fn apply_sampling_preserves_manual_dry_windows_and_omission() {
+    for window in [None, Some(0), Some(512)] {
+        let mut body = json!({});
+        apply_sampling(&mut body, None, Some(1.0), None, None, window);
+        assert_eq!(
+            body.get("dry_penalty_last_n"),
+            window.map(|n| json!(n)).as_ref(),
+            "manual windows and omission must remain unchanged"
+        );
+    }
+}
+
+/// Model the managed server's strict HTTP range check: the legacy -1 client
+/// alias must succeed through both real request builders, including SSE.
+#[test]
+fn dry_whole_context_alias_is_accepted_by_strict_http_server() {
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    assert_eq!(LOCAL_CONTEXT_SIZE, 32768);
+    for streaming in [false, true] {
+        // Also exercise the stub's rejection path so it cannot silently accept
+        // the negative wire value that caused the runtime failure.
+        for window in [-2, -1] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub");
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let stub = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().expect("accept request");
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                let mut content_length = 0;
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                    let line = line.trim_end_matches(['\r', '\n']);
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        content_length = n.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut bytes = vec![0; content_length];
+                reader.read_exact(&mut bytes).unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                let valid_window = body["dry_penalty_last_n"]
+                    .as_i64()
+                    .is_some_and(|n| (0..=i64::from(i32::MAX)).contains(&n));
+                let (status, content_type, response) = if !valid_window {
+                    (
+                        "400 Bad Request",
+                        "application/json",
+                        r#"{"error":{"message":"dry_penalty_last_n must be in range 0..2147483647"}}"#,
+                    )
+                } else if streaming {
+                    (
+                        "200 OK",
+                        "text/event-stream",
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    )
+                } else {
+                    (
+                        "200 OK",
+                        "application/json",
+                        r#"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#,
+                    )
+                };
+                write!(
+                    socket,
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                    response.len()
+                )
+                .unwrap();
+                body
+            });
+
+            let mut tokens = String::new();
+            let result = if streaming {
+                ocr_via_stream(
+                    &base_url,
+                    None,
+                    None,
+                    "p",
+                    "data:image/png;base64,AAAA",
+                    64,
+                    0.0,
+                    Some(1.3),
+                    Some(1.0),
+                    None,
+                    Some(2),
+                    Some(window),
+                    &mut |token| {
+                        tokens.push_str(token);
+                        true
+                    },
+                    &|| false,
+                )
+            } else {
+                ocr_via(
+                    &base_url,
+                    None,
+                    None,
+                    "p",
+                    "data:image/png;base64,AAAA",
+                    64,
+                    0.0,
+                    Some(1.3),
+                    Some(1.0),
+                    None,
+                    Some(2),
+                    Some(window),
+                )
+            };
+            let body = stub.join().expect("strict HTTP stub");
+            if window == -2 {
+                let error = result.expect_err("stub must reject negative wire windows");
+                assert!(error.to_string().contains("400"), "{error}");
+                assert_eq!(body["dry_penalty_last_n"], json!(-2));
+                continue;
+            }
+            let completion = result.expect("whole-context client alias must be accepted");
+            assert_eq!(completion.text, "ok");
+            assert!(!completion.truncated);
+            if streaming {
+                assert_eq!(tokens, "ok");
+                assert_eq!(body["stream"], json!(true));
+            }
+            assert_eq!(body["dry_penalty_last_n"], json!(32768));
+            assert_eq!(body["dry_allowed_length"], json!(2));
+            assert_eq!(body["dry_multiplier"], json!(1.0f32));
+            assert_eq!(body["repeat_penalty"], json!(1.3f32));
+        }
+    }
+}
+
+/// The local request builder sends DRY fields only when enabled. Remote
+/// isolation is independently exercised through RemoteEndpoint above.
 #[test]
 fn ocr_image_sends_dry_fields_only_when_set() {
     use std::io::{BufRead, BufReader, Read, Write};
@@ -727,16 +956,14 @@ fn ocr_image_sends_dry_fields_only_when_set() {
             let _ = tx.send(body);
         });
 
-        let ep = RemoteEndpoint {
-            base_url: format!("http://127.0.0.1:{port}"),
-            api_key: None,
-            model: None,
-        };
-        ep.ocr_image(
+        ocr_via(
+            &format!("http://127.0.0.1:{port}"),
+            None,
+            None,
             "p",
             "data:image/png;base64,AAAA",
             64,
-            None,
+            0.0,
             None,
             dry_multiplier,
             dry_base,

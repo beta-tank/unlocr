@@ -30,11 +30,11 @@ use rusqlite::Connection;
 /// `init()` wins; later calls are no-ops.
 static DB: OnceLock<Mutex<Connection>> = OnceLock::new();
 
-/// Authoritative schema: three tables + their indexes. Idempotent
+/// Baseline v5 schema: three tables + their indexes. Idempotent
 /// (`IF NOT EXISTS`), so re-running on an existing DB is a no-op. `PRAGMA
 /// user_version` and the connection-mode PRAGMAs are applied separately (see
 /// `init_conn` / `open_and_configure`) so the same schema text drives both the
-/// file DB and in-memory test DBs.
+/// file DB and in-memory test DBs. Later migrations run for fresh DBs too.
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS jobs (
     id           TEXT    PRIMARY KEY,
@@ -123,7 +123,7 @@ pub(crate) fn db_path() -> Result<PathBuf, String> {
 
 /// Apply the schema + connection PRAGMAs to an already-open connection. Shared by
 /// the file connection (`open_and_configure`) and in-memory test connections.
-/// `user_version` pins the schema at 4; bump + migrate here when the schema grows.
+/// `user_version` pins the schema at 6; bump + migrate here when the schema grows.
 ///
 /// Version-gated branches, not a `v < 5` catch-all: `SCHEMA_SQL`'s `CREATE TABLE`
 /// already has the full v5 shape, so a fresh DB (`v == 0`) must NOT also run any
@@ -131,7 +131,8 @@ pub(crate) fn db_path() -> Result<PathBuf, String> {
 /// Upgrades run only the ALTERs their starting version is missing: a v1 DB runs
 /// v1->v2, v2->v3, v3->v4, v4->v5; a v3 DB runs v3->v4 and v4->v5; a v4 DB runs
 /// only v4->v5 (jobs metadata columns). `ALTER TABLE ADD COLUMN` never rewrites
-/// existing column data, so every pre-migration field survives untouched.
+/// existing column data. The subsequent v6 migration upgrades profiles and adds
+/// the effective-run history snapshot, for both fresh and existing databases.
 pub(crate) fn init_conn(conn: &Connection) -> Result<(), String> {
     conn.pragma_update(None, "foreign_keys", true)
         .map_err(|e| format!("could not enable foreign_keys: {e}"))?;
@@ -203,6 +204,20 @@ pub(crate) fn init_conn(conn: &Connection) -> Result<(), String> {
             .map_err(|e| format!("could not set user_version to 5: {e}"))?;
         tx.commit()
             .map_err(|e| format!("could not commit schema migration: {e}"))?;
+    }
+    // v6: the profile JSON carries its own model/configuration versions. Keep
+    // schema additions, legacy conversion, and user_version in one transaction.
+    if v <= 5 {
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(
+            "ALTER TABLE settings ADD COLUMN configuration_json TEXT NOT NULL DEFAULT '{\"configurationVersion\":0}';
+             ALTER TABLE jobs ADD COLUMN effective_config TEXT;",
+        ).map_err(|e| format!("could not migrate configuration to v6: {e}"))?;
+        crate::settings::migrate_profiles(&tx)?;
+        tx.pragma_update(None, "user_version", 6u32)
+            .map_err(|e| e.to_string())?;
+        tx.commit()
+            .map_err(|e| format!("could not commit configuration migration: {e}"))?;
     }
     Ok(())
 }
@@ -285,16 +300,16 @@ mod tests {
         );
     "#;
 
-    /// A fresh in-memory DB reports `user_version = 5` after `init_conn`, the
+    /// A fresh in-memory DB reports `user_version = 6` after `init_conn`, the
     /// schema-version hook that replaces the old per-JSON `version` envelope.
     #[test]
-    fn schema_sets_user_version_to_5() {
+    fn schema_sets_user_version_to_6() {
         let conn = Connection::open_in_memory().unwrap();
         init_conn(&conn).unwrap();
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
     }
 
     /// `init_conn` is idempotent: running it twice on the same DB does not error
@@ -327,7 +342,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
     }
 
     /// A pre-migration v2 DB (the 23-column `settings` shape, before
@@ -382,7 +397,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
 
         let cols: Vec<String> = {
             let mut stmt = conn.prepare("PRAGMA table_info(settings)").unwrap();
@@ -448,7 +463,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
 
         let cols: Vec<String> = {
             let mut stmt = conn.prepare("PRAGMA table_info(settings)").unwrap();
@@ -507,7 +522,7 @@ mod tests {
         assert_eq!(mode, "remote");
         assert_eq!(url, "http://gpu:8000");
         assert_eq!(quant, "Q4_K_M");
-        assert_eq!(preset, "llamacpp");
+        assert_eq!(preset, "custom");
         assert_eq!(keep_images, 0);
         assert_eq!(pages_mode, "all");
     }
@@ -566,7 +581,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
 
         let cols: Vec<String> = {
             let mut stmt = conn.prepare("PRAGMA table_info(settings)").unwrap();
@@ -611,7 +626,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
 
         let cols: Vec<String> = {
             let mut stmt = conn.prepare("PRAGMA table_info(jobs)").unwrap();

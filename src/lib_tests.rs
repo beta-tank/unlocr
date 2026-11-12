@@ -9,10 +9,60 @@ fn ocroptions_default_matches_cli() {
     assert_eq!(o.max_tokens, 8000);
     assert_eq!(o.dpi, 144);
     assert_eq!(o.prompt, "Multi page parsing.");
+    assert_eq!(o.result_format, ResultFormat::Markdown);
     assert_eq!(o.port, 0);
     assert!(o.model_dir.is_none());
     assert!(!o.keep_images);
     assert!(o.pages.is_none());
+}
+
+#[test]
+fn result_formats_parse_and_preserve_structured_fixtures() {
+    assert_eq!(
+        parse_result_format(" Markdown ").unwrap(),
+        ResultFormat::Markdown
+    );
+    assert_eq!(parse_result_format("TEXT").unwrap(), ResultFormat::Text);
+    assert_eq!(parse_result_format("raw").unwrap(), ResultFormat::Raw);
+    assert_eq!(format_result("|", ResultFormat::Text), "|");
+    assert!(parse_result_format("").is_err());
+    assert!(parse_result_format("html").is_err());
+
+    let raw = " \n<PAGE><BLOCK>title<LEVEL3>[1,2,3,4]<FORK>Résumé\n\
+               <BLOCK>table[1,2,3,4]<FORK><table><tr><th>Name</th><th>Count</th></tr><tr><td>A</td><td>2</td></tr></table>\n\
+               <PAGE><PAGE>\n  ";
+    assert_eq!(format_result(raw, ResultFormat::Raw), raw);
+    let md = format_result(raw, ResultFormat::Markdown);
+    assert!(md.contains("### Résumé"));
+    assert!(md.contains("<table><tr><th>Name</th><th>Count</th>"));
+    let plain = format_result(raw, ResultFormat::Text);
+    assert_eq!(plain.trim(), "Résumé\nName\tCount\nA\t2");
+
+    let table = "## Inventory\n| Item | Count |\n| :--- | ---: |\n| bolts | 12 |";
+    assert_eq!(format_result(table, ResultFormat::Markdown), table);
+    assert_eq!(
+        format_result(table, ResultFormat::Text),
+        "Inventory\nItem\tCount\nbolts\t12"
+    );
+    assert_eq!(
+        format_result("<BLOCK>table[1,2,3,4]<FORK><table><tr><td>A &amp; B</td><td>&amp;lt;</td></tr></table>", ResultFormat::Text),
+        "A & B\t&lt;"
+    );
+
+    for raw in [raw, table] {
+        for plain_text in [false, true] {
+            let mut stream = AnnotationStripper::with_plain_text(plain_text);
+            let mut rendered = String::new();
+            for ch in raw.chars() {
+                rendered.push_str(&stream.push(&ch.to_string()));
+            }
+            rendered.push_str(&stream.finish());
+            assert_eq!(
+                rendered.trim(),
+                crate::output::clean_layout_annotations(raw, plain_text).trim()
+            );
+        }
+    }
 }
 
 #[test]
@@ -753,13 +803,12 @@ fn ocr_pages_aborts_when_cancelled() {
 
 /// End-to-end through the real rasterize+request loop: layout-annotated model
 /// output must reach the caller stripped, in the final page text AND in the
-/// concatenated PartialText stream, unless the prompt carries `<|grounding|>`
-/// (the user explicitly asked for boxes).
+/// concatenated PartialText stream, based only on the selected result format.
 #[test]
 fn ocr_pages_strips_layout_annotations() {
-    let raw = "<PAGE><BLOCK>title<LEVEL1>[168, 152, 838, 212]<FORK>CLAUDE CODE\n\
+    let raw = "  <PAGE><BLOCK>title<LEVEL1>[168, 152, 838, 212]<FORK>CLAUDE CODE\n\
                <MERGE>\n\
-               <BLOCK>footer[387, 875, 612, 893]<FORK>Written by Claude Code";
+               <BLOCK>footer[387, 875, 612, 893]<FORK>Written by Claude Code\n \n";
     let cleaned = "# CLAUDE CODE\nWritten by Claude Code";
 
     // The HTTP stub only needs an image signature. This tests the shared output
@@ -803,7 +852,7 @@ fn ocr_pages_strips_layout_annotations() {
     );
 
     let free = OcrOptions {
-        prompt: "Free OCR.".to_string(),
+        result_format: ResultFormat::Text,
         ..OcrOptions::default()
     };
     let (out, partials) = run(&free);
@@ -811,14 +860,84 @@ fn ocr_pages_strips_layout_annotations() {
     assert_eq!(partials.trim_end(), "CLAUDE CODE\nWritten by Claude Code");
     assert!(!out.combined.contains("<PAGE>"));
 
-    // Grounding prompt -> raw boxes preserved (stream and final text).
+    // The prompt no longer changes an explicit Markdown selection.
     let grounding = OcrOptions {
         prompt: "<|grounding|>Convert the document to markdown.".to_string(),
         ..OcrOptions::default()
     };
     let (out, partials) = run(&grounding);
-    assert_eq!(out.pages[0].1, raw, "grounding keeps raw layout output");
-    assert_eq!(partials, raw, "grounding stream keeps raw layout output");
+    assert_eq!(out.pages[0].1, cleaned);
+    assert_eq!(partials.trim_end(), cleaned);
+
+    let raw_opts = OcrOptions {
+        result_format: ResultFormat::Raw,
+        ..OcrOptions::default()
+    };
+    let (out, partials) = run(&raw_opts);
+    assert_eq!(out.pages[0].1, raw);
+    assert_eq!(
+        out.combined, raw,
+        "raw never adds application Markdown delimiters"
+    );
+    assert_eq!(partials, raw);
+
+    let free_prompt = OcrOptions {
+        prompt: "Free OCR.".to_string(),
+        ..OcrOptions::default()
+    };
+    let (out, _) = run(&free_prompt);
+    assert_eq!(
+        out.pages[0].1, cleaned,
+        "format is independent of legacy free prompt"
+    );
+}
+
+#[test]
+fn ocr_pages_retains_empty_page_results_in_every_format() {
+    let img_dir = tempfile::tempdir().unwrap();
+    let img_path = img_dir.path().join("empty.png");
+    std::fs::write(&img_path, b"\x89PNG\r\n\x1a\n").unwrap();
+    let raw = "\n<PAGE>\n<|det|>image [1,2,3,4]<|/det|>\n";
+    for result_format in [
+        ResultFormat::Markdown,
+        ResultFormat::Text,
+        ResultFormat::Raw,
+    ] {
+        let srv = server::Server::for_test(spawn_stub_ocr_server_with(raw)).unwrap();
+        let opts = OcrOptions {
+            result_format,
+            ..OcrOptions::default()
+        };
+        let out = ocr_pages(
+            &srv,
+            Path::new("/nonexistent/pdftoppm"),
+            &img_path,
+            &opts,
+            &mut |_| {},
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(
+            out.pages.len(),
+            1,
+            "an empty model page must still have a numbered entry"
+        );
+        assert_eq!(out.pages[0].0, 1);
+        match result_format {
+            ResultFormat::Markdown => {
+                assert_eq!(out.pages[0].1, "");
+                assert!(out.combined.starts_with("<!-- page 1 -->"));
+            }
+            ResultFormat::Text => {
+                assert_eq!(out.pages[0].1, "");
+                assert_eq!(out.combined, "");
+            }
+            ResultFormat::Raw => {
+                assert_eq!(out.pages[0].1, raw);
+                assert_eq!(out.combined, raw);
+            }
+        }
+    }
 }
 
 /// A single recognized image file skips pdftoppm entirely: OCR'd as one

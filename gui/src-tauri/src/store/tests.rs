@@ -45,6 +45,43 @@ fn job_insert_then_list_roundtrips() {
     assert_eq!(got[0].updated_at, 200);
 }
 
+#[test]
+fn effective_snapshot_survives_finish_failure_and_restart_reconciliation() {
+    let conn = mem_db();
+    let snapshot = serde_json::json!({
+        "mode": "remote", "baseUrl": "https://actual.example/v1", "model": "served-alias",
+        "quant": null, "visionMode": null, "processingMode": "pages",
+        "repetitionProfile": "default", "resultFormat": "text", "maxTokens": 1234,
+        "repeatPenalty": null, "dryMultiplier": null
+    });
+    for status in ["done", "failed", "interrupted"] {
+        let mut j = job(status, "");
+        j.status = "running".into();
+        j.options = j.options.with_effective_config(snapshot.clone());
+        db::insert(&conn, &j).unwrap();
+        if status == "interrupted" {
+            db::reconcile_interrupted(&conn, 300).unwrap();
+        } else {
+            db::update_status(&conn, status, status, "", "", 300, &JobMetrics::default()).unwrap();
+        }
+        let jobs = db::list(&conn).unwrap();
+        let stored = jobs.iter().find(|j| j.id == status).unwrap();
+        assert_eq!(stored.options.effective_config.as_ref(), Some(&snapshot));
+        let wire = serde_json::to_value(stored).unwrap();
+        assert_eq!(wire["options"]["effectiveConfig"], snapshot);
+    }
+    let old = job("old", "");
+    db::insert(&conn, &old).unwrap();
+    assert!(db::list(&conn)
+        .unwrap()
+        .iter()
+        .find(|j| j.id == "old")
+        .unwrap()
+        .options
+        .effective_config
+        .is_none());
+}
+
 /// INSERT OR REPLACE: a second write with the same id updates, never duplicates.
 #[test]
 fn job_upsert_no_duplicate() {

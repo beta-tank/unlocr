@@ -317,7 +317,7 @@ pub(crate) fn server_args(
         "1".into(),
         // Avoid allocating the model's potentially huge training context.
         "-c".into(),
-        "32768".into(),
+        super::LOCAL_CONTEXT_SIZE.to_string().into(),
         "--jinja".into(),
         "--host".into(),
         "127.0.0.1".into(),

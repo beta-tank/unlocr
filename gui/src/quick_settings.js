@@ -165,7 +165,6 @@ export function wireQuickSettingsPopup() {
       );
       if (result.ok) {
         const { settings: newSettings } = result;
-        renderEffectiveSummary();
         // Sync only the 4 fields this popup owns, in both the Workspace's own
         // `opt*` mirrors and the full Settings page's `set*` fields (either may
         // be open/stale). Deliberately does NOT call applySettingsToControls:
@@ -175,6 +174,7 @@ export function wireQuickSettingsPopup() {
           setVal(f.optId, newSettings[f.key]);
           setVal(f.setId, newSettings[f.key]);
         });
+        renderEffectiveSummary();
         if (savedEl) {
           savedEl.hidden = false;
           setTimeout(() => {

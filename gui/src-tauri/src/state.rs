@@ -9,6 +9,39 @@ use std::sync::Mutex;
 
 use unlocr::server::{RemoteEndpoint, Server};
 
+/// Applied load-time configuration only. Never include API keys or URL credentials.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EffectiveModelConfig {
+    pub mode: String,
+    pub quant: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub model_file: Option<String>,
+    pub mmproj_file: Option<String>,
+    /// Selected overrides, distinct from the resolved managed-cache file paths.
+    pub mmproj_override: Option<String>,
+    pub llama_bin_override: Option<String>,
+    pub image_max_tokens: Option<u32>,
+    /// None means the embedded GGUF template (or server-managed on remote).
+    pub chat_template: Option<String>,
+    pub vision_mode: Option<String>,
+}
+
+/// Strip credentials, query parameters, and fragments from display/history URLs.
+pub(crate) fn public_endpoint_url(raw: &str) -> String {
+    match tauri::Url::parse(raw) {
+        Ok(mut url) => {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string().trim_end_matches('/').to_string()
+        }
+        Err(_) => String::new(),
+    }
+}
+
 /// A loaded inference backend: a long-lived local llama-server (held so its model
 /// stays warm in RAM until unloaded) or a remote OpenAI-compatible endpoint.
 /// `Backend` is the litellm-style "loaded model" the Run gate checks for.
@@ -24,6 +57,7 @@ pub(crate) struct LoadedModel {
     pub(crate) label: String,
     /// "local" | "remote", echoed to the frontend for the badge.
     pub(crate) mode: String,
+    pub(crate) effective_config: EffectiveModelConfig,
 }
 
 /// App-wide state managed by Tauri. `model` is None until Load succeeds (Run is
@@ -70,5 +104,17 @@ impl AppState {
         if let Ok(mut g) = self.job_output_cache.lock() {
             *g = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn endpoint_snapshot_excludes_url_secrets() {
+        assert_eq!(
+            super::public_endpoint_url("https://user:secret@example.com:8080/api?key=secret#token"),
+            "https://example.com:8080/api"
+        );
+        assert_eq!(super::public_endpoint_url("not a URL with secret"), "");
     }
 }

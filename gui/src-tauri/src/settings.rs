@@ -24,12 +24,13 @@ use unlocr::OcrOptions;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(flatten)]
+    pub configuration: Configuration,
     /// "local" | "remote": which provider the Load button targets.
     #[serde(default = "default_mode")]
     pub mode: String,
-    /// Remote OpenAI-compatible base URL (no trailing slash needed). Defaults to
-    /// llama-server's own default host:port so the field is prefilled; the user
-    /// edits it when the server runs on a different port/IP.
+    /// Remote OpenAI-compatible base URL (no trailing slash needed). New profiles
+    /// start blank; migration preserves the exact saved value, including empty.
     #[serde(default = "default_remote_base_url")]
     pub remote_base_url: String,
     /// Optional bearer token for the remote endpoint. Plaintext (see module note).
@@ -58,10 +59,8 @@ pub struct Settings {
     /// mid-run. Default 15.
     #[serde(default = "default_idle_unload_minutes")]
     pub idle_unload_minutes: u32,
-    /// Which of `model.js`'s `ENGINE_PRESETS` (llamacpp/gpu/vllm/sglang/custom)
-    /// was last selected. Purely a frontend restoration hint: `mode` (above)
-    /// already tells `load_model` local vs remote, but cannot round-trip which
-    /// of the 3 remote presets was picked. Never read by any Rust load path.
+    /// Last selected connection: llamacpp (local) or custom (remote). The v6
+    /// migration maps the removed gpu/vllm/sglang presets to custom.
     #[serde(default = "default_engine_preset")]
     pub engine_preset: String,
     /// Startup-only DeepSeek-OCR vision-token budget (`--image-max-tokens`).
@@ -111,13 +110,127 @@ pub struct Settings {
     pub temperature: Option<f64>,
 }
 
+/// Versioned profile metadata and controls, stored together as JSON. Credentials
+/// deliberately remain in the existing keyring-backed field, never in profiles.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Configuration {
+    pub configuration_version: u32,
+    pub stock_model_profile: String,
+    pub stock_model_profile_version: u32,
+    pub compatibility_status: String,
+    pub vision_mode: String,
+    pub repetition_profile: String,
+    pub result_format: String,
+    pub dry_allowed_length: Option<u32>,
+    pub dry_penalty_last_n: Option<i32>,
+    pub anti_loop: bool,
+    pub local_config: serde_json::Value,
+    pub remote_config: serde_json::Value,
+}
+
+impl Default for Configuration {
+    fn default() -> Self {
+        Self {
+            configuration_version: 2,
+            stock_model_profile: "atomicchat/unlimited-ocr-2".into(),
+            stock_model_profile_version: 2,
+            compatibility_status: "stock-v2".into(),
+            vision_mode: "auto".into(),
+            repetition_profile: "default".into(),
+            result_format: "markdown".into(),
+            dry_allowed_length: None,
+            dry_penalty_last_n: None,
+            anti_loop: false,
+            local_config: serde_json::json!({}),
+            remote_config: serde_json::json!({}),
+        }
+    }
+}
+
+/// Seed profiles once from legacy fields. Explicit empty connection values are
+/// meaningful and are never replaced with guessed server/repository names.
+fn migrate_configuration(s: &mut Settings) {
+    if s.configuration.configuration_version >= 2 {
+        return;
+    }
+    if matches!(s.engine_preset.as_str(), "gpu" | "vllm" | "sglang") || s.mode == "remote" {
+        s.mode = "remote".into();
+        s.engine_preset = "custom".into();
+    } else {
+        s.engine_preset = "llamacpp".into();
+    }
+    let custom = !s.model_file.is_empty() || !s.mmproj_file.is_empty();
+    if !custom && s.chat_template == "deepseek-ocr" {
+        s.chat_template.clear();
+    }
+    let c = &mut s.configuration;
+    c.configuration_version = 2;
+    c.compatibility_status = if custom {
+        "custom-unverified"
+    } else {
+        "stock-v2"
+    }
+    .into();
+    c.vision_mode = if s.image_max_tokens.is_some() {
+        "expert"
+    } else {
+        "auto"
+    }
+    .into();
+    c.repetition_profile = if s.repeat_penalty.is_some()
+        || s.dry_multiplier.is_some()
+        || s.dry_base.is_some()
+        || c.anti_loop
+        || c.dry_allowed_length.is_some()
+        || c.dry_penalty_last_n.is_some()
+    {
+        "manual"
+    } else {
+        "default"
+    }
+    .into();
+    c.local_config = serde_json::json!({
+        "defaultQuant": s.default_quant, "modelFile": s.model_file,
+        "mmprojFile": s.mmproj_file, "llamaBin": s.llama_bin,
+        "visionMode": c.vision_mode, "imageMaxTokens": s.image_max_tokens,
+        "chatTemplate": s.chat_template, "repetitionProfile": c.repetition_profile,
+        "repeatPenalty": s.repeat_penalty, "dryMultiplier": s.dry_multiplier,
+        "dryBase": s.dry_base, "dryAllowedLength": c.dry_allowed_length,
+        "dryPenaltyLastN": c.dry_penalty_last_n, "antiLoop": c.anti_loop,
+        "temperature": s.temperature, "defaultMaxTokens": s.default_max_tokens,
+        "defaultPrompt": s.default_prompt
+    });
+    c.remote_config = serde_json::json!({
+        "remoteBaseUrl": s.remote_base_url, "remoteModel": s.remote_model,
+        "temperature": s.temperature, "defaultMaxTokens": s.default_max_tokens,
+        "defaultPrompt": s.default_prompt, "repetitionProfile": "default"
+    });
+}
+
+/// Called inside the schema transaction, so profile conversion and its version
+/// marker commit atomically with the new columns.
+pub(crate) fn migrate_profiles(conn: &Connection) -> Result<(), String> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE id = 1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !exists {
+        return Ok(());
+    }
+    let mut s = fetch(conn)?;
+    migrate_configuration(&mut s);
+    persist(conn, &s)
+}
+
 fn default_mode() -> String {
     "local".to_string()
 }
-// llama-server's own defaults: host 127.0.0.1, port 8080. Prefilling this means
-// the Remote field is ready to edit instead of blank.
 fn default_remote_base_url() -> String {
-    "http://127.0.0.1:8080".to_string()
+    String::new()
 }
 fn default_quant() -> String {
     OcrOptions::default().quant
@@ -151,6 +264,7 @@ fn default_output_mode() -> String {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            configuration: Configuration::default(),
             mode: default_mode(),
             remote_base_url: default_remote_base_url(),
             remote_api_key: String::new(),
@@ -194,11 +308,26 @@ fn fetch(conn: &Connection) -> Result<Settings, String> {
                 default_prompt, idle_unload_minutes,
                 engine_preset, image_max_tokens, chat_template, repeat_penalty,
                 dry_multiplier, dry_base, keep_images, pages_mode, page_from,
-                page_to, model_file, mmproj_file, output_mode, temperature
+                page_to, model_file, mmproj_file, output_mode, temperature,
+                configuration_json, dry_allowed_length, dry_penalty_last_n, anti_loop
          FROM settings WHERE id = 1",
         [],
         |row| {
             Ok(Settings {
+                configuration: {
+                    let json: String = row.get(24)?;
+                    let mut c: Configuration = serde_json::from_str(&json).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            24,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?;
+                    c.dry_allowed_length = row.get(25)?;
+                    c.dry_penalty_last_n = row.get(26)?;
+                    c.anti_loop = row.get(27)?;
+                    c
+                },
                 mode: row.get(0)?,
                 remote_base_url: row.get(1)?,
                 remote_api_key: row.get(2)?,
@@ -241,9 +370,11 @@ fn persist(conn: &Connection, s: &Settings) -> Result<(), String> {
             default_prompt, idle_unload_minutes,
             engine_preset, image_max_tokens, chat_template, repeat_penalty,
             dry_multiplier, dry_base, keep_images, pages_mode, page_from,
-            page_to, model_file, mmproj_file, output_mode, temperature)
+            page_to, model_file, mmproj_file, output_mode, temperature,
+            configuration_json, dry_allowed_length, dry_penalty_last_n, anti_loop)
          VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
+                 ?25, ?26, ?27, ?28)",
         rusqlite::params![
             s.mode,
             s.remote_base_url,
@@ -269,6 +400,10 @@ fn persist(conn: &Connection, s: &Settings) -> Result<(), String> {
             s.mmproj_file,
             s.output_mode,
             s.temperature,
+            serde_json::to_string(&s.configuration).map_err(|e| e.to_string())?,
+            s.configuration.dry_allowed_length,
+            s.configuration.dry_penalty_last_n,
+            s.configuration.anti_loop,
         ],
     )
     .map_err(|e| format!("could not save settings: {e}"))?;
@@ -344,13 +479,145 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn legacy_db(preset: &str, custom: bool, key: &str) -> Connection {
+        let conn = mem_db();
+        conn.execute_batch(
+            "ALTER TABLE settings DROP COLUMN configuration_json;
+            ALTER TABLE jobs DROP COLUMN effective_config; PRAGMA user_version = 5;",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (id, mode, engine_preset, remote_base_url,
+            remote_model, remote_api_key, default_quant, default_dpi, default_max_tokens,
+            default_prompt, chat_template, model_file, mmproj_file, repeat_penalty,
+            dry_multiplier, dry_allowed_length, dry_penalty_last_n, anti_loop)
+            VALUES (1, 'remote', ?1, '', '', ?2, 'AD-Q4_K', 144, 8000, 'custom prompt',
+            'deepseek-ocr', ?3, ?4, 1.3, 1.0, 2, -1, 1)",
+            rusqlite::params![
+                preset,
+                key,
+                if custom { "/custom.gguf" } else { "" },
+                if custom { "/projector.gguf" } else { "" }
+            ],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn legacy_remote_presets_keep_empty_connection_and_key_mechanism() {
+        for preset in ["gpu", "vllm", "sglang", "custom"] {
+            for key in ["__saved__", "legacy-plaintext"] {
+                let conn = legacy_db(preset, false, key);
+                if preset != "custom" {
+                    // Old engine selection is authoritative even for inconsistent
+                    // rows whose coarse mode was left at its local default.
+                    conn.execute("UPDATE settings SET mode='local'", [])
+                        .unwrap();
+                }
+                crate::db::init_conn(&conn).unwrap();
+                let s = fetch(&conn).unwrap();
+                assert_eq!(s.engine_preset, "custom");
+                assert_eq!(s.mode, "remote");
+                assert_eq!(s.remote_base_url, "");
+                assert_eq!(s.remote_model, "");
+                assert_eq!(s.remote_api_key, key);
+                assert_eq!(s.configuration.remote_config["remoteBaseUrl"], "");
+                assert!(!s.configuration.remote_config.to_string().contains(key));
+                assert_eq!(s.default_dpi, 144);
+                assert_eq!(s.repeat_penalty, Some(1.3));
+                assert_eq!(s.dry_multiplier, Some(1.0));
+                assert_eq!(s.configuration.repetition_profile, "manual");
+                assert_eq!(s.configuration.dry_allowed_length, Some(2));
+            }
+        }
+    }
+
+    #[test]
+    fn stock_template_migrates_but_custom_gguf_overrides_survive() {
+        for custom in [false, true] {
+            let conn = legacy_db("llamacpp", custom, "__saved__");
+            conn.execute(
+                "UPDATE settings SET mode='local', remote_base_url='https://server/v1',
+                remote_model='served-alias'",
+                [],
+            )
+            .unwrap();
+            crate::db::init_conn(&conn).unwrap();
+            crate::db::init_conn(&conn).unwrap(); // repeated startup is lossless
+            let s = fetch(&conn).unwrap();
+            assert_eq!(s.engine_preset, "llamacpp");
+            assert_eq!(s.default_quant, "AD-Q4_K");
+            assert_eq!(s.chat_template, if custom { "deepseek-ocr" } else { "" });
+            assert_eq!(
+                s.configuration.compatibility_status,
+                if custom {
+                    "custom-unverified"
+                } else {
+                    "stock-v2"
+                }
+            );
+            assert_eq!(s.configuration.stock_model_profile_version, 2);
+            assert_eq!(
+                s.configuration.local_config["chatTemplate"],
+                s.chat_template
+            );
+            assert_eq!(s.configuration.remote_config["remoteModel"], "served-alias");
+            assert_eq!(
+                s.configuration.remote_config["remoteBaseUrl"],
+                "https://server/v1"
+            );
+            if custom {
+                assert_eq!(s.model_file, "/custom.gguf");
+                assert_eq!(s.mmproj_file, "/projector.gguf");
+            }
+        }
+    }
+
+    #[test]
+    fn configuration_migration_rolls_back_partial_schema_changes() {
+        let conn = legacy_db("gpu", false, "__saved__");
+        conn.execute_batch("ALTER TABLE jobs ADD COLUMN effective_config TEXT;")
+            .unwrap();
+        assert!(crate::db::init_conn(&conn).is_err());
+        assert!(conn
+            .prepare("SELECT configuration_json FROM settings")
+            .is_err());
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 5);
+        conn.execute_batch("ALTER TABLE jobs DROP COLUMN effective_config;")
+            .unwrap();
+        crate::db::init_conn(&conn).unwrap();
+        assert_eq!(fetch(&conn).unwrap().engine_preset, "custom");
+    }
+
+    #[test]
+    fn new_controls_and_separate_profiles_roundtrip() {
+        let conn = mem_db();
+        let mut s = Settings::default();
+        s.configuration.vision_mode = "base".into();
+        s.configuration.repetition_profile = "manual".into();
+        s.configuration.result_format = "raw".into();
+        s.configuration.dry_allowed_length = Some(4);
+        s.configuration.dry_penalty_last_n = Some(-1);
+        s.configuration.local_config = serde_json::json!({"defaultMaxTokens": 8000});
+        s.configuration.remote_config = serde_json::json!({"defaultMaxTokens": 2000});
+        let decoded: Settings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        persist(&conn, &decoded).unwrap();
+        assert_eq!(
+            serde_json::to_value(fetch(&conn).unwrap()).unwrap(),
+            serde_json::to_value(s).unwrap()
+        );
+    }
+
     /// Fresh in-memory DB with the schema applied.
     fn mem_db() -> Connection {
         crate::db::mem_db()
     }
 
-    /// A fresh store has no settings row -> fetch returns defaults, including the
-    /// prefilled llama-server remote URL.
+    /// A fresh store has no settings row -> fetch returns the current defaults.
     #[test]
     fn missing_row_returns_default() {
         let conn = mem_db();
@@ -374,6 +641,7 @@ mod tests {
     fn upsert_then_get_roundtrips() {
         let conn = mem_db();
         let s = Settings {
+            configuration: Configuration::default(),
             mode: "remote".into(),
             remote_base_url: "http://gpu:8000".into(),
             remote_api_key: "sk-secret".into(),
@@ -465,10 +733,10 @@ mod tests {
         assert_eq!(n, 1, "settings must hold exactly one row (id = 1)");
     }
 
-    /// The remote base URL prefills to llama-server's default host:port.
+    /// A new remote connection must be configured explicitly.
     #[test]
-    fn default_remote_url_is_llama_default() {
-        assert_eq!(Settings::default().remote_base_url, "http://127.0.0.1:8080");
+    fn default_remote_url_is_blank() {
+        assert!(Settings::default().remote_base_url.is_empty());
     }
 
     /// camelCase on the wire (regression guard for the serde rename the frontend

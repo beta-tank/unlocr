@@ -69,6 +69,11 @@ pub struct Args {
     #[arg(long, value_enum, default_value_t = OutputModeArg::Single)]
     pub output_mode: OutputModeArg,
 
+    /// Application-side result conversion: markdown (default), ordinary text,
+    /// or unmodified model markup. Explicit selection overrides legacy --task behavior.
+    #[arg(long, value_parser = ["markdown", "text", "raw"])]
+    pub result_format: Option<String>,
+
     /// Quality tier, an alias for a model quant:
     /// best=BF16 (5.88GB), good=Q8_0 (3.13GB, default), less=AD-Q4_K (2.02GB).
     #[arg(long, value_enum, default_value_t = Quality::Good)]
@@ -83,9 +88,9 @@ pub struct Args {
     #[arg(long, default_value_t = 8000)]
     pub max_tokens: u32,
 
-    /// Task preset that picks the OCR prompt: markdown (clean markdown, default),
-    /// grounding (markdown + layout coordinates), free (plain text), figure (parse a
-    /// chart/figure). Ignored when --prompt is set.
+    /// Instruction preset: markdown uses the trained v2 instruction (default).
+    /// grounding/free/figure are experimental legacy prompts. Ignored when
+    /// --prompt is set. Use --result-format to choose output conversion explicitly.
     #[arg(long, value_enum, default_value_t = Task::Markdown)]
     pub task: Task,
 
@@ -102,28 +107,26 @@ pub struct Args {
     #[arg(long, default_value_t = 144)]
     pub dpi: u32,
 
-    /// Cap on vision tokens per image (--image-max-tokens). DeepSeek-OCR's
-    /// base/large detail knob: higher = finer recognition, slower + more VRAM.
-    /// Omit to let the model use its default. Local mode only.
+    /// Expert vision-token limit (--image-max-tokens). The pinned v2 port uses
+    /// 273 for Base; omit for default dynamic tiling (Gundam). Local mode only.
     #[arg(long)]
     pub image_max_tokens: Option<u32>,
 
-    /// Named chat template forwarded to llama-server's --chat-template (e.g.
-    /// deepseek-ocr). Omit to use the template baked into the model. Local mode only.
+    /// Expert chat template override forwarded to llama-server's --chat-template.
+    /// Omit to use the built-in v2 template. Local mode only.
     #[arg(long)]
     pub chat_template: Option<String>,
 
     /// Sampling repetition penalty (e.g. 1.3) sent with every page. Helps escape
-    /// the infinite-loop output some quants (notably Q4_K_M) hit on dense pages.
+    /// repeated output; the current local profile needs v2 quality comparison.
     /// Defaults to 1.3 on the local GGUF path; pass a value to override.
-    /// Inert/omitted for remote (`--endpoint`/`--gpu`) mode, which does not
-    /// exhibit the quant loop.
+    /// Inert/omitted for remote (`--endpoint`/`--gpu`) mode.
     #[arg(long)]
     pub repeat_penalty: Option<f32>,
 
     /// DRY sampler strength (llama.cpp `dry_multiplier`) sent with every page.
-    /// Penalizes repeated *sequences* (the analog of upstream's no-repeat-ngram
-    /// processor), catching the loops a mild repeat penalty cannot. Defaults to
+    /// Penalizes repeated sequences, using a different mechanism from upstream's
+    /// no-repeat n-gram processor. Defaults to
     /// 1.0 on the local GGUF path; pass 0 to disable. Inert/omitted for remote
     /// (`--endpoint`/`--gpu`) mode, whose server rejects llama.cpp-only fields.
     #[arg(long)]
@@ -145,7 +148,8 @@ pub struct Args {
     pub dry_allowed_length: Option<u32>,
 
     /// DRY scan window (`dry_penalty_last_n`): -1 = whole context (the anti-loop
-    /// value), 0 = disabled, >0 = a fixed window. Sent only when --dry-multiplier
+    /// value, translated to the fixed local context size of 32768 on the HTTP
+    /// wire), 0 = disabled, >0 = a fixed window. Sent only when --dry-multiplier
     /// is also set; omitted = server default. Inert for remote mode.
     #[arg(long, allow_hyphen_values = true)]
     pub dry_penalty_last_n: Option<i32>,
@@ -271,18 +275,17 @@ impl Quality {
 }
 
 /// OCR 2's trained parsing instruction plus legacy DeepSeek-OCR task prompts.
-/// `--prompt` overrides the resolved string for full control. Non-grounding
-/// output is cleaned in the shared pipeline, not guaranteed tag-free by a prompt.
+/// `--prompt` overrides the resolved string for full control. Output conversion
+/// is implemented by the application, not guaranteed by any prompt.
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
 pub enum Task {
-    /// Clean structured markdown (headings, lists, tables), no coordinates. The default.
+    /// Trained v2 parsing instruction. The default.
     Markdown,
-    /// Grounded markdown: each line tagged (text/title/...) with a bounding box.
-    /// Use when you want layout coordinates (e.g. to rebuild HTML).
+    /// Experimental legacy grounding instruction; defaults to raw output.
     Grounding,
-    /// Plain-text OCR with no layout/markdown structure.
+    /// Experimental legacy free-OCR instruction; defaults to text output.
     Free,
-    /// Parse a chart/figure into a structured description.
+    /// Experimental legacy figure instruction.
     Figure,
 }
 
@@ -323,6 +326,24 @@ impl OutputModeArg {
 }
 
 impl Args {
+    /// Explicit representation always wins. Preserve the old CLI prompt-based
+    /// behavior only when --result-format is absent; library/GUI callers use the
+    /// typed field directly and never infer format from a prompt.
+    pub fn resolved_result_format(&self) -> unlocr::ResultFormat {
+        if let Some(format) = &self.result_format {
+            // clap's value parser has already checked these exact values.
+            return unlocr::parse_result_format(format).expect("validated result format");
+        }
+        let prompt = self.resolved_prompt();
+        if prompt.contains("<|grounding|>") {
+            unlocr::ResultFormat::Raw
+        } else if prompt.trim() == "Free OCR." {
+            unlocr::ResultFormat::Text
+        } else {
+            unlocr::ResultFormat::Markdown
+        }
+    }
+
     /// The OCR prompt to use: explicit `--prompt` wins; otherwise the `--task`
     /// preset. Mirrors the --quant-over---quality override pattern.
     pub fn resolved_prompt(&self) -> String {
@@ -415,4 +436,47 @@ pub fn parse_pages(s: &str) -> Res<(u32, Option<u32>)> {
         return Err(format!("page range is reversed: {first}-{last}").into());
     }
     Ok((first, Some(last)))
+}
+
+#[cfg(test)]
+mod result_format_tests {
+    use super::*;
+    use unlocr::ResultFormat;
+
+    #[test]
+    fn explicit_result_format_overrides_legacy_prompt_defaults() {
+        for (args, expected) in [
+            (vec!["unlocr", "x.pdf"], ResultFormat::Markdown),
+            (
+                vec!["unlocr", "x.pdf", "--task", "grounding"],
+                ResultFormat::Raw,
+            ),
+            (
+                vec!["unlocr", "x.pdf", "--task", "free"],
+                ResultFormat::Text,
+            ),
+            (
+                vec![
+                    "unlocr",
+                    "x.pdf",
+                    "--task",
+                    "grounding",
+                    "--result-format",
+                    "markdown",
+                ],
+                ResultFormat::Markdown,
+            ),
+            (
+                vec!["unlocr", "x.pdf", "--result-format", "text"],
+                ResultFormat::Text,
+            ),
+            (
+                vec!["unlocr", "x.pdf", "--result-format", "raw"],
+                ResultFormat::Raw,
+            ),
+        ] {
+            assert_eq!(Args::parse_from(args).resolved_result_format(), expected);
+        }
+        assert!(Args::try_parse_from(["unlocr", "x.pdf", "--result-format", "html"]).is_err());
+    }
 }

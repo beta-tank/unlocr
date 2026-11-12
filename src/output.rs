@@ -1,4 +1,4 @@
-use crate::options::{OcrOutput, OutputMode};
+use crate::options::{OcrOutput, OutputMode, ResultFormat};
 use crate::Res;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -145,6 +145,17 @@ pub fn strip_layout_annotations(text: &str) -> String {
     clean_layout_annotations(text, false)
 }
 
+/// Convert a model response using the shared v1/v2 layout parser. Raw is an
+/// identity operation, including whitespace and special tokens. This is a
+/// page-level converter, not a document-mode cross-page merge implementation.
+pub fn format_result(text: &str, format: ResultFormat) -> String {
+    match format {
+        ResultFormat::Markdown => clean_layout_annotations(text, false),
+        ResultFormat::Text => clean_layout_annotations(text, true),
+        ResultFormat::Raw => text.to_string(),
+    }
+}
+
 pub(crate) fn clean_layout_annotations(text: &str, plain_text: bool) -> String {
     let mut out = String::with_capacity(text.len());
     let mut first = true;
@@ -168,13 +179,91 @@ pub(crate) fn clean_layout_annotations(text: &str, plain_text: bool) -> String {
 /// prefix is removed. `title` lines become `# ` headings (materially better
 /// markdown for one match arm); every other label keeps just its content.
 fn clean_layout_line(line: &str, plain_text: bool) -> Option<String> {
+    let cleaned = clean_layout_line_inner(line, plain_text)?;
+    if plain_text {
+        let lines: Vec<_> = cleaned.split('\n').filter_map(plain_result_line).collect();
+        (!lines.is_empty()).then(|| lines.join("\n"))
+    } else {
+        Some(cleaned)
+    }
+}
+
+/// Text rendering of the headings and tables emitted by the model. Keep HTML
+/// tables in Markdown (including rowspan/colspan); text retains their reading
+/// order with tab-separated cells rather than leaking HTML tags.
+fn plain_result_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('|') && trimmed.ends_with('|') {
+        let cells: Vec<_> = trimmed[1..trimmed.len() - 1]
+            .split('|')
+            .map(str::trim)
+            .collect();
+        if cells.iter().all(|cell| {
+            let rule = cell.trim_matches(':');
+            rule.len() >= 3 && rule.bytes().all(|b| b == b'-')
+        }) {
+            return None;
+        }
+        return Some(cells.join("\t"));
+    }
+    let hashes = trimmed.bytes().take_while(|b| *b == b'#').count();
+    let line = if (1..=6).contains(&hashes) && trimmed.as_bytes().get(hashes) == Some(&b' ') {
+        &trimmed[hashes + 1..]
+    } else {
+        line
+    };
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        let Some(end) = rest[start..].find('>') else {
+            out.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let tag = &rest[start + 1..start + end];
+        let name = tag
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        match name.to_ascii_lowercase().as_str() {
+            "/td" | "/th" => out.push('\t'),
+            "/tr" | "br" => {
+                while out.ends_with('\t') {
+                    out.pop();
+                }
+                out.push('\n');
+            }
+            "table" | "/table" | "thead" | "/thead" | "tbody" | "/tbody" | "tfoot" | "/tfoot"
+            | "tr" | "td" | "th" => {}
+            _ => out.push_str(&rest[start..=start + end]),
+        }
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    Some(
+        out.trim_end_matches(['\t', '\n'])
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&"),
+    )
+}
+
+fn clean_layout_line_inner(line: &str, plain_text: bool) -> Option<String> {
     // OCR 2 block headers are separate from their content. Discard even a
     // truncated header (<BLOCK>te) rather than leaking metadata into the text.
     // Several blocks may arrive on one line; preserve their boundaries.
     if line.contains("<BLOCK>") {
         let mut parts = line.split("<BLOCK>");
         let mut out = Vec::new();
-        if let Some(prefix) = parts.next().and_then(|s| clean_layout_line(s, plain_text)) {
+        if let Some(prefix) = parts
+            .next()
+            .and_then(|s| clean_layout_line_inner(s, plain_text))
+        {
             if !prefix.trim().is_empty() {
                 out.push(prefix);
             }
@@ -183,7 +272,7 @@ fn clean_layout_line(line: &str, plain_text: bool) -> Option<String> {
             let Some((header, content)) = block.split_once("<FORK>") else {
                 continue;
             };
-            let Some(content) = clean_layout_line(content, plain_text) else {
+            let Some(content) = clean_layout_line_inner(content, plain_text) else {
                 continue;
             };
             if header.trim_start().starts_with("title") && !plain_text && !content.is_empty() {
