@@ -304,6 +304,7 @@
   "settings.showToasts": "팝업 알림 표시 (즉시 적용)",
   "settings.toastNotifications": "팝업 알림",
   "settings.unavailable": "사용할 수 없음: {error}",
+  "startup.initializing": "초기화 중 — 하드웨어와 로컬 도구를 확인하고 있습니다. 잠시 기다려 주세요. 앱은 계속 사용할 수 있습니다.",
   "status.done": "완료",
   "status.error": "오류",
   "status.failed": "실패",

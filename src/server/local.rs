@@ -3,7 +3,9 @@ use crate::Res;
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::process::Command;
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 /// Manages the local llama-server process lifecycle.
@@ -21,7 +23,7 @@ pub struct Server {
 #[cfg(windows)]
 /// Windows-specific process grouping helper using Job Objects.
 mod win_job {
-    use std::os::windows::io::{AsRawHandle, RawHandle};
+    use std::os::windows::io::AsRawHandle;
     use std::process::Child;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
@@ -180,7 +182,7 @@ impl Server {
                 .tempfile()?;
             let stderr_handle = stderr_log.reopen()?;
 
-            let mut cmd = Command::new(bin);
+            let mut cmd = crate::process::command(bin);
             cmd.args(server_args(
                 model,
                 mmproj,

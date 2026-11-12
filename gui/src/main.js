@@ -128,20 +128,20 @@ window.addEventListener("DOMContentLoaded", () => {
   // is independent of the settings row), so it runs once here rather than
   // also inside wireSettings' onSaved -- that ran unconditionally right after
   // this call anyway, making the onSaved copy a redundant second IPC round trip.
-  markCachedQuants();
-  wireSettings().then(() => {
+  const cachedQuantsReady = markCachedQuants();
+  const settingsReady = wireSettings().then(() => {
     // Wired only after wireSettings' restore has landed, so those initial
     // field assignments don't spuriously trigger an immediate re-save.
     wireAutoSaveEngineOptions();
   });
-  wireCacheControls();
+  const cacheReady = wireCacheControls();
   // wireModelFilesTable is NOT called here: it sha256-hashes every cached GGUF
   // (multi-GB) and would peg a core at boot. wireRail runs it lazily on Settings-open.
-  wireSystemRequirements();
-  wireDependencies();
+  const systemReady = wireSystemRequirements();
+  const dependenciesReady = wireDependencies();
   wireQuickSettingsPopup();
   wirePasswordFilePicker();
-  refreshModelStatus(ui);
+  const modelStatusReady = refreshModelStatus(ui);
   // The backend idle-unload watcher drops the warm model after N idle minutes and
   // emits model://unloaded; refresh the badge + Run gate so the UI reflects it.
   const unloadEv = window.__TAURI__ && window.__TAURI__.event;
@@ -399,12 +399,19 @@ window.addEventListener("DOMContentLoaded", () => {
   // `ui` turns preflight into the Run-gate (EH-0004 bite 1): a missing tool
   // disables Run and shows the reason inline. Passing `rail` (bite 2) drives the
   // pipeline stages from the same report.
-  try {
-    preflightOnLoad(ui, rail);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn("[preflight] skipped:", err.message);
-  }
+  // Wait for the restored quant before probing its cache. All backend probes
+  // run on workers; this banner is informational, never a modal/interaction lock.
+  const preflightReady = Promise.allSettled([settingsReady, cachedQuantsReady])
+    .then(() => preflightOnLoad(ui, rail));
+  Promise.allSettled([
+    settingsReady, cachedQuantsReady, systemReady, dependenciesReady,
+    modelStatusReady, cacheReady, preflightReady,
+  ]).then(() => {
+    // Probe failures already appear in their respective status panels. Finishing
+    // initialization must not override the preflight/model gates or imply success.
+    const status = document.getElementById("startupStatus");
+    if (status) status.hidden = true;
+  });
 
   // The pipeline pane (preflight-derived) must not stay frozen at boot state.
   // Re-run preflight when readiness can change: quant selection (checks a

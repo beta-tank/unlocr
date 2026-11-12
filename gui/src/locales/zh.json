@@ -304,6 +304,7 @@
   "settings.showToasts": "显示弹出通知（立即生效）",
   "settings.toastNotifications": "弹出通知",
   "settings.unavailable": "不可用：{error}",
+  "startup.initializing": "正在初始化 — 检查硬件和本地工具。请稍候；您可以继续使用应用。",
   "status.done": "完成",
   "status.error": "错误",
   "status.failed": "失败",

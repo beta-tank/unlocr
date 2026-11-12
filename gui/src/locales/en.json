@@ -304,6 +304,7 @@
   "settings.showToasts": "Show popup notifications (applies immediately)",
   "settings.toastNotifications": "Toast notifications",
   "settings.unavailable": "unavailable: {error}",
+  "startup.initializing": "Initializing — checking hardware and local tools. Please wait; you can continue using the app.",
   "status.done": "Done",
   "status.error": "Error",
   "status.failed": "Failed",

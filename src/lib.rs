@@ -20,6 +20,7 @@ mod job;
 mod options;
 mod output;
 mod preview;
+mod process;
 
 pub use job::*;
 pub use options::*;

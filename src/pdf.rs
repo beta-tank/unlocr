@@ -2,7 +2,6 @@
 
 use crate::Res;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 /// Run `pdftoppm -png -r <dpi> <pdf> <outdir>/page` and collect the PNGs sorted
@@ -59,7 +58,7 @@ pub fn rasterize_range(
         Some(s) if s.starts_with('-') => Path::new(".").join(pdf),
         _ => pdf.to_path_buf(),
     };
-    let mut cmd = Command::new(pdftoppm);
+    let mut cmd = crate::process::command(pdftoppm);
     cmd.arg("-png").arg("-r").arg(dpi.to_string());
     if let Some((first, last)) = range {
         cmd.arg("-f").arg(first.to_string());
@@ -180,7 +179,7 @@ pub fn info(pdftoppm: &Path, pdf: &Path, password: Option<&str>) -> Res<PdfInfo>
         "pdfinfo not found next to pdftoppm (it ships in the same poppler install; \
          reinstalling poppler should add it)",
     )?;
-    let mut cmd = Command::new(&pdfinfo);
+    let mut cmd = crate::process::command(&pdfinfo);
     if let Some(pw) = password {
         cmd.arg("-upw").arg(pw);
     }
@@ -226,7 +225,7 @@ pub fn info(pdftoppm: &Path, pdf: &Path, password: Option<&str>) -> Res<PdfInfo>
 /// fallback) instead of re-deriving it from `info`.
 pub fn can_open(pdftoppm: &Path, pdf: &Path, password: Option<&str>) -> bool {
     if let Some(pdfinfo) = sibling_pdfinfo(pdftoppm) {
-        let mut cmd = Command::new(&pdfinfo);
+        let mut cmd = crate::process::command(&pdfinfo);
         if let Some(pw) = password {
             cmd.arg("-upw").arg(pw);
         }
@@ -263,7 +262,7 @@ pub fn needs_user_password(pdftoppm: &Path, pdf: &Path) -> bool {
         return false;
     }
     match sibling_pdfinfo(pdftoppm) {
-        Some(pdfinfo) => match Command::new(&pdfinfo).arg(pdf).output() {
+        Some(pdfinfo) => match crate::process::command(&pdfinfo).arg(pdf).output() {
             Ok(o) if !o.status.success() => String::from_utf8_lossy(&o.stderr)
                 .to_lowercase()
                 .contains("password"),

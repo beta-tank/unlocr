@@ -11,7 +11,11 @@
 use unlocr::preflight::sysreq::SystemInfo;
 
 #[tauri::command]
-pub(crate) fn system_requirements() -> Result<SystemInfo, String> {
-    let cache = unlocr::model::cache_dir(None).map_err(|e| e.to_string())?;
-    Ok(unlocr::preflight::sysreq::check_system_requirements(&cache))
+pub(crate) async fn system_requirements() -> Result<SystemInfo, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let cache = unlocr::model::cache_dir(None).map_err(|e| e.to_string())?;
+        Ok(unlocr::preflight::sysreq::check_system_requirements(&cache))
+    })
+    .await
+    .map_err(|e| format!("system requirements worker join failed: {e}"))?
 }

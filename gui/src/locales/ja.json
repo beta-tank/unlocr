@@ -304,6 +304,7 @@
   "settings.showToasts": "ポップアップ通知を表示（すぐに適用）",
   "settings.toastNotifications": "ポップアップ通知",
   "settings.unavailable": "利用不可: {error}",
+  "startup.initializing": "初期化中 — ハードウェアとローカルツールを確認しています。しばらくお待ちください。アプリは引き続き使用できます。",
   "status.done": "完了",
   "status.error": "エラー",
   "status.failed": "失敗",

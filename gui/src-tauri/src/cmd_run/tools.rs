@@ -28,7 +28,13 @@ pub(crate) fn host_os() -> &'static str {
 
 /// Report which external tools resolve and which can be auto-downloaded (Windows only).
 #[tauri::command]
-pub(crate) fn list_tools() -> Vec<ToolStatus> {
+pub(crate) async fn list_tools() -> Result<Vec<ToolStatus>, String> {
+    tauri::async_runtime::spawn_blocking(tool_statuses)
+        .await
+        .map_err(|e| format!("tool status worker join failed: {e}"))
+}
+
+fn tool_statuses() -> Vec<ToolStatus> {
     let dl = unlocr::tools::downloadable();
     ["pandoc", "pdftoppm", "llama-server"]
         .iter()

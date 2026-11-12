@@ -1,15 +1,12 @@
+use crate::process::command;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 /// Retrieves the total physical RAM size of the system in bytes.
 pub fn get_total_ram_bytes() -> Option<u64> {
     if cfg!(target_os = "macos") {
-        let out = Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .ok()?;
+        let out = command("sysctl").args(["-n", "hw.memsize"]).output().ok()?;
         let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
         stdout.parse().ok()
     } else if cfg!(target_os = "linux") {
@@ -25,7 +22,7 @@ pub fn get_total_ram_bytes() -> Option<u64> {
         }
         None
     } else if cfg!(target_os = "windows") {
-        let out = Command::new("powershell")
+        let out = command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -49,7 +46,7 @@ pub fn get_free_disk_space_bytes(path: &Path) -> Option<u64> {
         // vars); a value containing a single quote would otherwise terminate the
         // -Command string literal and inject arbitrary PowerShell. -LiteralPath
         // also stops wildcard/glob interpretation of the path.
-        let out = Command::new("powershell")
+        let out = command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -62,7 +59,7 @@ pub fn get_free_disk_space_bytes(path: &Path) -> Option<u64> {
         stdout.parse().ok()
     } else {
         // macOS or Linux (Unix)
-        let out = Command::new("df").arg("-k").arg(path).output().ok()?;
+        let out = command("df").arg("-k").arg(path).output().ok()?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         let lines: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
         if lines.len() < 2 {
@@ -97,18 +94,18 @@ pub fn get_free_disk_space_bytes(path: &Path) -> Option<u64> {
 /// Number of logical CPU cores (includes hyperthreads / SMT).
 pub fn get_cpu_logical_cores() -> Option<u32> {
     if cfg!(target_os = "macos") {
-        let out = Command::new("sysctl")
+        let out = command("sysctl")
             .args(["-n", "hw.logicalcpu"])
             .output()
             .ok()?;
         let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
         stdout.parse().ok()
     } else if cfg!(target_os = "linux") {
-        let out = Command::new("nproc").output().ok()?;
+        let out = command("nproc").output().ok()?;
         let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
         stdout.parse().ok()
     } else if cfg!(target_os = "windows") {
-        let out = Command::new("powershell")
+        let out = command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -126,7 +123,7 @@ pub fn get_cpu_logical_cores() -> Option<u32> {
 /// Number of physical CPU cores (excludes hyperthreads / SMT).
 pub fn get_cpu_physical_cores() -> Option<u32> {
     if cfg!(target_os = "macos") {
-        let out = Command::new("sysctl")
+        let out = command("sysctl")
             .args(["-n", "hw.physicalcpu"])
             .output()
             .ok()?;
@@ -155,7 +152,7 @@ pub fn get_cpu_physical_cores() -> Option<u32> {
             None
         }
     } else if cfg!(target_os = "windows") {
-        let out = Command::new("powershell")
+        let out = command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -173,7 +170,7 @@ pub fn get_cpu_physical_cores() -> Option<u32> {
 /// CPU model / brand string (e.g. "Apple M2 Pro", "Intel(R) Core(TM) i7-10700K").
 pub fn get_cpu_model() -> Option<String> {
     if cfg!(target_os = "macos") {
-        let out = Command::new("sysctl")
+        let out = command("sysctl")
             .args(["-n", "machdep.cpu.brand_string"])
             .output()
             .ok()?;
@@ -195,7 +192,7 @@ pub fn get_cpu_model() -> Option<String> {
         }
         None
     } else if cfg!(target_os = "windows") {
-        let out = Command::new("powershell")
+        let out = command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -219,7 +216,7 @@ pub fn detect_gpu() -> Option<String> {
     if cfg!(target_os = "macos") {
         // system_profiler SPDisplaysDataType surfaces the GPU chipset model and
         // Metal support. We take the first Chipset Model line.
-        let out = Command::new("system_profiler")
+        let out = command("system_profiler")
             .args(["SPDisplaysDataType"])
             .output()
             .ok()?;
@@ -240,7 +237,7 @@ pub fn detect_gpu() -> Option<String> {
         None
     } else if cfg!(target_os = "linux") {
         // Try nvidia-smi first (structured, most reliable for NVIDIA GPUs).
-        let smi = Command::new("nvidia-smi")
+        let smi = command("nvidia-smi")
             .args(["--query-gpu=name", "--format=csv,noheader"])
             .output();
         if let Ok(out) = smi {
@@ -256,7 +253,7 @@ pub fn detect_gpu() -> Option<String> {
         // Fall back to lspci for AMD / Intel / basic detection. Call lspci
         // directly and filter in Rust: avoids a `sh -c "... | grep"` subprocess
         // pair (which also depends on sh + grep being on PATH).
-        let lspci = Command::new("lspci").output().ok()?;
+        let lspci = command("lspci").output().ok()?;
         let stdout = String::from_utf8_lossy(&lspci.stdout);
         for line in stdout.lines() {
             let lower = line.to_ascii_lowercase();
@@ -280,7 +277,7 @@ pub fn detect_gpu() -> Option<String> {
         }
         None
     } else if cfg!(target_os = "windows") {
-        let out = Command::new("powershell")
+        let out = command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",

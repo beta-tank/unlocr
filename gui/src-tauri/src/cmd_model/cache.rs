@@ -35,7 +35,16 @@ pub(crate) struct CacheInfo {
 /// read llama-server's build number, and check the model/projector GGUFs for the
 /// given quant are present in the cache.
 #[tauri::command]
-pub(crate) fn preflight(
+pub(crate) async fn preflight(
+    llama_bin: Option<String>,
+    quant: Option<String>,
+) -> Result<PreflightReport, String> {
+    tauri::async_runtime::spawn_blocking(move || preflight_report(llama_bin, quant))
+        .await
+        .map_err(|e| format!("preflight worker join failed: {e}"))?
+}
+
+fn preflight_report(
     llama_bin: Option<String>,
     quant: Option<String>,
 ) -> Result<PreflightReport, String> {
@@ -147,11 +156,13 @@ pub(crate) fn preflight(
 
 /// Quant tags already downloaded to the model cache, for the model picker.
 #[tauri::command]
-pub(crate) fn list_local_models() -> Vec<String> {
-    match unlocr::model::cache_dir(None) {
+pub(crate) async fn list_local_models() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| match unlocr::model::cache_dir(None) {
         Ok(cache) => unlocr::model::list_cached_quants(&cache),
         Err(_) => Vec::new(),
-    }
+    })
+    .await
+    .map_err(|e| format!("local models worker join failed: {e}"))
 }
 
 /// One entry in the quant picker: the published quant tag, its exact download
@@ -185,11 +196,15 @@ fn available_quants(cached: &std::collections::HashSet<String>) -> Vec<Available
 /// resolved, so the dropdown still renders the full lineup, just all
 /// not-yet-downloaded.
 #[tauri::command]
-pub(crate) fn list_available_quants() -> Vec<AvailableQuant> {
-    let cached: std::collections::HashSet<String> = unlocr::model::cache_dir(None)
-        .map(|c| unlocr::model::list_cached_quants(&c).into_iter().collect())
-        .unwrap_or_default();
-    available_quants(&cached)
+pub(crate) async fn list_available_quants() -> Result<Vec<AvailableQuant>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let cached: std::collections::HashSet<String> = unlocr::model::cache_dir(None)
+            .map(|c| unlocr::model::list_cached_quants(&c).into_iter().collect())
+            .unwrap_or_default();
+        available_quants(&cached)
+    })
+    .await
+    .map_err(|e| format!("available quants worker join failed: {e}"))
 }
 
 /// Top-level model-cache artifacts: the model GGUFs plus any interrupted-download
@@ -219,7 +234,13 @@ fn dir_size(dir: &Path) -> u64 {
 }
 
 #[tauri::command]
-pub(crate) fn get_cache_info() -> Result<CacheInfo, String> {
+pub(crate) async fn get_cache_info() -> Result<CacheInfo, String> {
+    tauri::async_runtime::spawn_blocking(cache_info)
+        .await
+        .map_err(|e| format!("cache info worker join failed: {e}"))?
+}
+
+fn cache_info() -> Result<CacheInfo, String> {
     let cache = unlocr::model::cache_dir(None).map_err(|e| e.to_string())?;
     let path = cache.display().to_string();
     let artifact_bytes: u64 = std::fs::read_dir(&cache)
@@ -289,9 +310,13 @@ fn list_cached_files_in(cache: &Path) -> Result<Vec<CachedFileInfo>, String> {
 /// Per-file listing of every cached GGUF (model quants + mmproj) with name, size,
 /// sha256, and mtime, for the Settings model-management table.
 #[tauri::command]
-pub(crate) fn list_cached_files() -> Result<Vec<CachedFileInfo>, String> {
-    let cache = unlocr::model::cache_dir(None).map_err(|e| e.to_string())?;
-    list_cached_files_in(&cache)
+pub(crate) async fn list_cached_files() -> Result<Vec<CachedFileInfo>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let cache = unlocr::model::cache_dir(None).map_err(|e| e.to_string())?;
+        list_cached_files_in(&cache)
+    })
+    .await
+    .map_err(|e| format!("cached files worker join failed: {e}"))?
 }
 
 /// `filename` is renderer-supplied (echoed back from a model-files table row),

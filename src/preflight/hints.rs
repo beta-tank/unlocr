@@ -1,6 +1,5 @@
 use super::locate;
 use std::path::Path;
-use std::process::Command;
 
 /// Detect what package managers are available on the user's PATH.
 pub fn detect_package_managers() -> Vec<&'static str> {
@@ -102,7 +101,10 @@ pub fn generate_install_hint() -> String {
 /// in its preflight report without re-implementing the parse. Additive: existing
 /// callers (`check`, `run_doctor`) are unchanged.
 pub fn build_number(llama_server: &Path) -> Option<u64> {
-    let out = Command::new(llama_server).arg("--version").output().ok()?;
+    let out = crate::process::command(llama_server)
+        .arg("--version")
+        .output()
+        .ok()?;
     // llama.cpp prints the version line to stderr.
     let text = String::from_utf8_lossy(&out.stderr);
     let text = if text.trim().is_empty() {
