@@ -231,7 +231,8 @@ pub(crate) fn get_cache_info() -> Result<CacheInfo, String> {
                 .sum()
         })
         .unwrap_or(0);
-    let size_bytes = artifact_bytes + dir_size(&cache.join("previews"));
+    let previews = unlocr::model::user_cache_dir().map_err(|e| e.to_string())?;
+    let size_bytes = artifact_bytes + dir_size(&previews.join("previews"));
     Ok(CacheInfo { path, size_bytes })
 }
 
@@ -341,7 +342,8 @@ pub(crate) fn clear_model_cache() -> Result<(), String> {
             }
         }
     }
-    match std::fs::remove_dir_all(cache.join("previews")) {
+    let previews = unlocr::model::user_cache_dir().map_err(|e| e.to_string())?;
+    match std::fs::remove_dir_all(previews.join("previews")) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => errors.push(format!("previews/: {e}")),

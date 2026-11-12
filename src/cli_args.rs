@@ -162,7 +162,7 @@ pub struct Args {
     #[arg(long)]
     pub llama_bin: Option<PathBuf>,
 
-    /// Model cache directory (default: per-OS cache dir)
+    /// Model cache directory (default: executable directory)
     #[arg(long)]
     pub model_dir: Option<PathBuf>,
 

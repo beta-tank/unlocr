@@ -88,7 +88,7 @@ pub fn run() {
             // is resolved per-OS at runtime, so the scope is extended here rather
             // than hardcoded in tauri.conf.json. Best-effort: a failure just means
             // previews fail to load (logged), not an app crash.
-            if let Ok(cache) = unlocr::model::cache_dir(None) {
+            if let Ok(cache) = unlocr::model::user_cache_dir() {
                 let previews = cache.join("previews");
                 let _ = std::fs::create_dir_all(&previews);
                 // SECURITY: scope is the `previews` SUBDIR only, never the cache root.

@@ -226,6 +226,15 @@ fn ensure_rejects_traversal_quant() {
 }
 
 #[test]
+fn default_models_and_tools_are_installation_local() {
+    let exe = std::env::current_exe().unwrap();
+    let cache = cache_dir(None).unwrap();
+    assert_eq!(cache, exe.parent().unwrap());
+    assert_eq!(cache.join("tools"), exe.parent().unwrap().join("tools"));
+    assert_ne!(cache, user_cache_dir().unwrap());
+}
+
+#[test]
 fn cache_dir_override_used_and_created() {
     let tmp = tempfile::tempdir().unwrap();
     let custom = tmp.path().join("my-custom-cache");

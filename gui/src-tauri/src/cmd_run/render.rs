@@ -14,7 +14,7 @@ pub(crate) async fn render_pages(
 ) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<String>, String> {
         let dpi = dpi.unwrap_or_else(|| OcrOptions::default().dpi);
-        let cache = unlocr::model::cache_dir(None).map_err(|e| e.to_string())?;
+        let cache = unlocr::model::user_cache_dir().map_err(|e| e.to_string())?;
         let pdftoppm = unlocr::preflight::pdftoppm().map_err(|e| e.to_string())?;
         let pages = unlocr::render_pages(
             &pdftoppm,
@@ -43,7 +43,7 @@ pub(crate) async fn render_page(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let dpi = dpi.unwrap_or_else(|| OcrOptions::default().dpi);
-        let cache = unlocr::model::cache_dir(None).map_err(|e| e.to_string())?;
+        let cache = unlocr::model::user_cache_dir().map_err(|e| e.to_string())?;
         let pdftoppm = unlocr::preflight::pdftoppm().map_err(|e| e.to_string())?;
         let path = unlocr::render_page(
             &pdftoppm,

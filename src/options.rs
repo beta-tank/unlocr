@@ -19,7 +19,7 @@ pub struct OcrOptions {
     pub prompt: String,
     /// Port for llama-server (0 = auto-pick a free port).
     pub port: u16,
-    /// Model cache directory override (None = per-OS default cache dir).
+    /// Model cache directory override (None = executable directory).
     pub model_dir: Option<PathBuf>,
     /// Keep the intermediate page PNGs instead of deleting them.
     pub keep_images: bool,

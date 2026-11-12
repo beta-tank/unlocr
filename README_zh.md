@@ -188,7 +188,7 @@ unlocr report.pdf --out ./out --quality best
 | `--chat-template NAME` | *(模型默认值)* | 转发给 `llama-server --chat-template`（例如 `deepseek-ocr`）；仅限本地模式。 |
 | `--repeat-penalty F` | `1.3` (本地 GGUF) / *(服务器默认值)* (`--endpoint`/`--gpu`) | 采样重复惩罚项；有助于打破较小量化模型中的生成循环。 |
 | `--llama-bin PATH` | *自动检测* | `llama-server` 二进制文件的路径。 |
-| `--model-dir PATH` | *系统缓存* | 缓存 GGUF 模型下载的自定义目录。 |
+| `--model-dir PATH` | *可执行文件所在目录* | 缓存 GGUF 模型下载的自定义目录。 |
 | `--port N` | `0` (自动) | 启动的 `llama-server` 所使用的端口。 |
 | `--keep-images` | `false` | 保留处理过程中生成的中间页面 PNG。 |
 | `--gpu` | `false` | 通过兼容的本地服务器运行完整的 Unlimited-OCR-2 模型。`--endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR-2` 的快捷方式。 |
@@ -211,11 +211,11 @@ GGUF 文件会在本地进行缓存。它们的文件体积可能相当大（根
 
 | 操作系统 | 默认缓存路径 |
 |----|--------------------|
-| **macOS** | `~/Library/Caches/unlocr` |
-| **Linux** | `$XDG_CACHE_HOME/unlocr` (或 `~/.cache/unlocr`) |
-| **Windows**| `%LOCALAPPDATA%\unlocr` |
+| **macOS** | 可执行文件所在目录（应用包内的 `Contents/MacOS`） |
+| **Linux** | 可执行文件所在目录 |
+| **Windows**| 包含 `.exe` 的安装目录 |
 
-*可使用 `--model-dir PATH` 或 `$XDG_CACHE_HOME` 环境变量来覆盖此路径。*
+模型权重保存在可执行文件旁，下载的工具保存在其 `tools/` 子目录中。安装目录必须可写。可使用 `--model-dir PATH` 覆盖模型路径。旧用户缓存中的下载文件不会自动移动；可将 GGUF 文件和 `tools/` 文件夹移至安装目录以继续使用。用户设置、会话数据和 PDF 预览仍保存在原有的用户目录中（`XDG_CACHE_HOME` 仍适用于预览）。
 
 ### 卸载 & 回收空间
 

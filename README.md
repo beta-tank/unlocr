@@ -187,7 +187,7 @@ For a complete, in-depth guide on all CLI arguments, sampling configurations, an
 | `--chat-template NAME` | *(model default)* | Forwarded to `llama-server --chat-template` (e.g., `deepseek-ocr`); local mode only. |
 | `--repeat-penalty F` | `1.3` (local GGUF) / *(server default)* (`--endpoint`/`--gpu`) | Sampling repeat penalty; helps break generation loops in smaller quants. |
 | `--llama-bin PATH` | *Auto-detected* | Path to the `llama-server` binary. |
-| `--model-dir PATH` | *OS Cache* | Custom cache directory for GGUF model downloads. |
+| `--model-dir PATH` | *Executable directory* | Custom cache directory for GGUF model downloads. |
 | `--port N` | `0` (Auto) | Port for the spawned `llama-server`. |
 | `--keep-images` | `false` | Retain the intermediate page PNGs generated during processing. |
 | `--gpu` | `false` | Use a compatible local server for the full Unlimited-OCR-2 model. Shortcut for `--endpoint http://localhost:8000 --endpoint-model baidu/Unlimited-OCR-2`. |
@@ -208,11 +208,11 @@ GGUFs are cached locally. They can be quite large (~1.8 GB to ~8.0 GB total depe
 
 | OS | Default Cache Path |
 |----|--------------------|
-| **macOS** | `~/Library/Caches/unlocr` |
-| **Linux** | `$XDG_CACHE_HOME/unlocr` (or `~/.cache/unlocr`) |
-| **Windows**| `%LOCALAPPDATA%\unlocr` |
+| **macOS** | Directory containing the executable (`Contents/MacOS` inside the app bundle) |
+| **Linux** | Directory containing the executable |
+| **Windows**| Installation directory containing the `.exe` |
 
-*Override the path using `--model-dir PATH` or the `$XDG_CACHE_HOME` env var.*
+Model weights are stored next to the executable; downloaded utilities are stored in its `tools/` subdirectory. The installation directory must be writable. Override the model path using `--model-dir PATH`. Existing downloads in the old user cache are not moved automatically; move the GGUF files and `tools/` folder to the installation directory to reuse them. User settings, session data, and PDF previews keep their existing per-user locations (`XDG_CACHE_HOME` still applies to previews).
 
 ### Uninstalling & Reclaiming Space
 To remove the application binary and purge downloaded model weights, run:

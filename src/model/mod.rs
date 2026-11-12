@@ -164,12 +164,24 @@ pub fn file_sha256(path: &Path) -> Res<String> {
     Ok(hex_from_digest(hasher.finalize()))
 }
 
-/// `--model-dir` override, else the per-OS cache dir + `/unlocr`.
+/// `--model-dir` override, else the directory containing the running executable.
+/// Model weights live here; managed tools live in its `tools` subdirectory.
 pub fn cache_dir(override_dir: Option<PathBuf>) -> Res<PathBuf> {
     let dir = match override_dir {
         Some(d) => d,
-        None => base_cache_dir()?.join("unlocr"),
+        None => std::env::current_exe()?
+            .parent()
+            .ok_or("could not resolve application installation directory")?
+            .to_path_buf(),
     };
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Per-user cache for previews and other session artifacts, separate from the
+/// installation-local model weights and tools.
+pub fn user_cache_dir() -> Res<PathBuf> {
+    let dir = base_cache_dir()?.join("unlocr");
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
