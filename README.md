@@ -17,10 +17,6 @@ GUI/CLI for unlimited-ocr
 </div>
 
 <p align="center">
-  <b>English</b> | <a href="README_zh.md">简体中文</a>
-</p>
-
-<p align="center">
   <a href="assets/unlocr-screenshot.png" target="_blank">
     <img src="assets/unlocr-screenshot.png" alt="unlocr screenshot" width="600" style="max-width: 100%; border: 1px solid #eaecef; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />
   </a>
@@ -234,9 +230,8 @@ In the GUI, select **GPU full model (vLLM · Unlimited-OCR-2)**. This preset onl
 configures the connection; it does not install or start a remote backend.
 
 > [!TIP]
-> **Google Colab**: Check out the Google Colab notebooks to run the full GPU pipeline on a free Colab T4 cloud instance:
+> **Google Colab**: Check out the Google Colab notebook to run the full GPU pipeline on a free Colab T4 cloud instance:
 > - **English**: [`colab/unlocr-deepseek-ocr-gpu.ipynb`](colab/unlocr-deepseek-ocr-gpu.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/whit3rabbit/unlocr/blob/main/colab/unlocr-deepseek-ocr-gpu.ipynb)
-> - **简体中文**: [`colab/unlocr-deepseek-ocr-gpu_zh.ipynb`](colab/unlocr-deepseek-ocr-gpu_zh.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/whit3rabbit/unlocr/blob/main/colab/unlocr-deepseek-ocr-gpu_zh.ipynb)
 
 ### Unofficial Benchmark
 *   **Hardware**: macOS (Apple Silicon, Metal)

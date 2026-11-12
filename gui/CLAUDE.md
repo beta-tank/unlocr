@@ -16,7 +16,7 @@ Desktop front end for `unlocr`. Wraps the core OCR pipeline; no OCR logic lives 
     - `jobs.js` & `./library.js`, `./board.js`, `./job_card.js`, `./rail.js`: library database grid, kanban board, and jobs view handlers.
     - `settings.js`: settings configuration pane.
     - `toasts.js`: notifications/toasts management.
-    - `assets/i18n.js` + `locales/{en,zh,ja,ko}.json`: i18n runtime + translation strings (see Internationalization below).
+    - `assets/i18n.js` + `locales/en.json`: i18n runtime + English strings (see Internationalization below).
 - `src-tauri/`      Rust backend (crate `unlocr-gui`, lib name `gui_lib`).
   - `src/lib.rs`    `run()` builder + `generate_handler!`. `src/main.rs` calls `gui_lib::run()`.
   - `src/cmd_model/` directory: model loading/management Tauri commands (`mod.rs`, `cache.rs`, `sysreq.rs`).
@@ -125,7 +125,7 @@ Desktop front end for `unlocr`. Wraps the core OCR pipeline; no OCR logic lives 
 - Runtime: `src/assets/i18n.js` is a classic `<script>` in `<head>` (loads before the
   deferred `main.js` module), exposing `window.unlocrI18n` (`t`, `apply`, `setLocale`,
   `onLocaleChange`, `ready`) plus a short `window.t`. Strings live in
-  `src/locales/{en,zh,ja,ko}.json`: a flat `dotted.key` -> string map with
+  `src/locales/en.json` (the only shipped locale): a flat `dotted.key` -> string map with
   `{placeholder}` substitution via `t(key, { placeholder })`. A missing key renders as
   the raw dotted key (visible, not blank), so the locale files MUST stay in KEY PARITY
   (every file has the same key set).
@@ -133,14 +133,14 @@ Desktop front end for `unlocr`. Wraps the core OCR pipeline; no OCR logic lives 
   (textContent), `data-i18n-ph` (placeholder), or `data-i18n-aria` (aria-label).
   `applyText()` walks those on every locale load; the English default is the
   progressive-enhancement fallback before the (async) locale fetch resolves.
-- Adding a string: add the `dotted.key` to ALL locale files (en + zh/ja/ko). Keep the
+- Adding a string: add the `dotted.key` to ALL shipped locale files (currently en only). Keep the
   files sorted alphabetically, 2-space indent, raw UTF-8 (no `\uXXXX` escapes) by
   re-dumping: `json.dumps(d, ensure_ascii=False, indent=2, sort_keys=True)` + trailing
   newline (the existing files round-trip cleanly through exactly this). Verify parity
   afterward: every locale must have the same key set (a one-line python key-set diff
   against en catches a forgotten file).
 - Adding a locale: drop `locales/<tag>.json` with full key parity with en, add the tag
-  to `AVAILABLE` in `i18n.js`, and add the `<option value="<tag>">` to `#localeSelect`
+  to `AVAILABLE` in `i18n.js`, and add the `<option value="<tag>">` to both `#localeSelect` and `#qsLocale`
   in `index.html`. Locale resolution: exact tag, then primary subtag (zh-CN -> zh),
   then en.
 - Persistence: the chosen locale is stored in `localStorage` (`unlocr.locale`), NOT

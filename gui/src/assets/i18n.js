@@ -18,9 +18,9 @@
 (function () {
   "use strict";
 
-  // Locale files that ship under locales/. Add a tag here when its JSON lands
-  // (zh/ja/ko arrive in EH-0019/0020/0021); everything else falls back to en.
-  var AVAILABLE = ["en", "zh", "ja", "ko"];
+  // Locale files that ship under locales/. Add a tag here when its JSON lands;
+  // everything else falls back to en.
+  var AVAILABLE = ["en"];
   var DEFAULT = "en";
 
   // Locale is a frontend-only preference, so it is persisted in localStorage
